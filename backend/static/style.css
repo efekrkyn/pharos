@@ -366,6 +366,16 @@ body {
   font-style: italic;
 }
 
+.mission-progress {
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.mission-progress.active {
+  color: var(--accent);
+}
+
 /* --- Command status line ---------------------------------------------- */
 
 .command-status {
@@ -410,4 +420,9 @@ body {
   font-weight: 700;
   border: 2px solid var(--text);
   box-shadow: 0 0 6px rgba(245, 158, 11, 0.6);
+}
+
+.waypoint-icon.active {
+  border-color: var(--accent);
+  box-shadow: 0 0 10px var(--accent-hi), 0 0 6px rgba(245, 158, 11, 0.6);
 }

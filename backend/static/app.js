@@ -76,6 +76,30 @@ function renderTelemetry(data) {
   } else {
     setStatus("waiting", "Waiting for drone");
   }
+
+  renderMissionProgress(data);
+}
+
+const missionProgressEl = document.getElementById("mission-progress");
+
+function renderMissionProgress(data) {
+  const current = data.mission_current;
+  const total = data.mission_total;
+
+  if (!total) {
+    missionProgressEl.textContent = "No active mission";
+    missionProgressEl.classList.remove("active");
+    highlightWaypoint(-1);
+    return;
+  }
+
+  if (current >= total) {
+    missionProgressEl.textContent = `Mission complete (${total}/${total})`;
+  } else {
+    missionProgressEl.textContent = `Waypoint ${current + 1} / ${total}`;
+  }
+  missionProgressEl.classList.add("active");
+  highlightWaypoint(current);
 }
 
 function connect() {
@@ -169,6 +193,15 @@ function waypointIcon(number) {
   });
 }
 
+function highlightWaypoint(index) {
+  waypoints.forEach((wp, i) => {
+    const el = wp.marker.getElement();
+    if (el) {
+      el.classList.toggle("active", i === index);
+    }
+  });
+}
+
 function renderWaypointList() {
   waypointListEl.innerHTML = "";
   waypoints.forEach((wp, index) => {
@@ -229,14 +262,14 @@ const velVerticalEl = document.getElementById("vel-vertical");
 
 // Speed scales for keyboard taps and full joystick deflection. The joystick
 // values match the backend's clamp limits so full deflection = max speed.
-const KEY_FORWARD_SPEED = 3; // m/s
-const KEY_RIGHT_SPEED = 3; // m/s
-const KEY_VERTICAL_SPEED = 1.5; // m/s
-const KEY_YAW_SPEED = 1.0; // rad/s
+const KEY_FORWARD_SPEED = 5; // m/s
+const KEY_RIGHT_SPEED = 5; // m/s
+const KEY_VERTICAL_SPEED = 2.5; // m/s
+const KEY_YAW_SPEED = 1.5; // rad/s
 
-const MANUAL_MAX_HORIZONTAL = 5; // m/s
-const MANUAL_MAX_VERTICAL = 3; // m/s
-const MANUAL_MAX_YAW = 1.5; // rad/s
+const MANUAL_MAX_HORIZONTAL = 8; // m/s, matches backend clamp
+const MANUAL_MAX_VERTICAL = 4; // m/s, matches backend clamp
+const MANUAL_MAX_YAW = 2.0; // rad/s, matches backend clamp
 
 const MANUAL_SEND_INTERVAL_MS = 100;
 
@@ -411,7 +444,9 @@ const resetMoveStick = setupJoystick(
   document.querySelector("#joystick-move .joystick-base"),
   document.getElementById("stick-move"),
   (x, y) => {
-    joyMove = { x, y };
+    // Both axes are inverted relative to the drone's body frame for this
+    // stick: pushing forward/right should move the drone forward/right.
+    joyMove = { x: -x, y: -y };
     updateVelocity();
   }
 );

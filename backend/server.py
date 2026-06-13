@@ -33,9 +33,9 @@ MISSION_ACCEPTANCE_RADIUS_M = 2.0
 # Manual control: how fast we re-send velocity setpoints, and the speed
 # limits applied to incoming /api/manual/command values.
 MANUAL_SETPOINT_RATE_HZ = 10
-MANUAL_MAX_HORIZONTAL_M_S = 5.0
-MANUAL_MAX_VERTICAL_M_S = 3.0
-MANUAL_MAX_YAW_RATE_RAD_S = 1.5
+MANUAL_MAX_HORIZONTAL_M_S = 8.0
+MANUAL_MAX_VERTICAL_M_S = 4.0
+MANUAL_MAX_YAW_RATE_RAD_S = 2.0
 
 hub = TelemetryHub()
 
@@ -51,6 +51,11 @@ manual_velocity = {"forward": 0.0, "right": 0.0, "down": 0.0, "yaw_speed_deg_s":
 # The background task streaming manual_velocity to PX4, or None if manual
 # control (offboard mode) isn't active.
 manual_task: asyncio.Task | None = None
+
+# Latest mission progress, merged into every telemetry broadcast so existing
+# clients keep working unchanged and new clients get progress "for free".
+# total == 0 means no mission is active.
+mission_state = {"mission_current": 0, "mission_total": 0}
 
 
 async def telemetry_task() -> None:
@@ -79,25 +84,63 @@ async def telemetry_task() -> None:
                         "lon": position.longitude_deg,
                         "abs_alt": position.absolute_altitude_m,
                         "rel_alt": position.relative_altitude_m,
+                        **mission_state,
                     }
                 )
         except Exception:
             logger.exception("Telemetry stream ended, will retry connection")
             drone = None
             await _stop_manual_task()
-            await hub.broadcast(dict(WAITING_STATE))
+            mission_state.update(mission_current=0, mission_total=0)
+            await hub.broadcast({**WAITING_STATE, **mission_state})
+
+
+async def mission_progress_task() -> None:
+    """Track mission_progress() on the shared connection and broadcast it.
+
+    Merges into the same telemetry messages sent by telemetry_task() (via
+    mission_state) so existing clients don't need a new message type. Retries
+    quietly whenever there's no drone or the stream ends.
+    """
+    while True:
+        current_drone = drone
+        if current_drone is None:
+            await asyncio.sleep(1)
+            continue
+
+        try:
+            stream = current_drone.mission.mission_progress()
+            while True:
+                # If telemetry_task reconnected with a new drone/connection
+                # while we were subscribed to the old one, this stream may
+                # never yield again — bail out and resubscribe on the new one.
+                if drone is not current_drone:
+                    break
+                try:
+                    progress = await asyncio.wait_for(stream.__anext__(), timeout=2.0)
+                except asyncio.TimeoutError:
+                    continue
+                mission_state.update(mission_current=progress.current, mission_total=progress.total)
+                await hub.broadcast({**hub.latest, **mission_state})
+        except StopAsyncIteration:
+            await asyncio.sleep(1)
+        except Exception:
+            logger.exception("Mission progress stream ended, will retry")
+            await asyncio.sleep(1)
 
 
 @contextlib.asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Start the shared telemetry task on startup, cancel it on shutdown."""
-    task = asyncio.create_task(telemetry_task())
+    """Start the shared background tasks on startup, cancel them on shutdown."""
+    tasks = [asyncio.create_task(telemetry_task()), asyncio.create_task(mission_progress_task())]
     try:
         yield
     finally:
-        task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await task
+        for task in tasks:
+            task.cancel()
+        for task in tasks:
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
 
 
 app = FastAPI(lifespan=lifespan)
