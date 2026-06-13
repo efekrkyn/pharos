@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Drone GCS</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@400;600;700&display=swap"
+    rel="stylesheet"
+  />
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">Drone GCS</div>
+    <div class="connection-indicator">
+      <span id="status-dot" class="status-dot waiting"></span>
+      <span id="status-text">Connecting...</span>
+    </div>
+  </header>
+
+  <div class="layout">
+    <main class="map-panel">
+      <div id="map"></div>
+    </main>
+
+    <aside class="sidebar">
+      <section class="panel">
+        <h2>Telemetry</h2>
+        <div class="telemetry-grid">
+          <div class="telemetry-card">
+            <span class="telemetry-label">Latitude</span>
+            <span class="telemetry-value" id="lat">—</span>
+          </div>
+          <div class="telemetry-card">
+            <span class="telemetry-label">Longitude</span>
+            <span class="telemetry-value" id="lon">—</span>
+          </div>
+          <div class="telemetry-card">
+            <span class="telemetry-label">Abs. altitude</span>
+            <span class="telemetry-value" id="abs-alt">—</span>
+          </div>
+          <div class="telemetry-card">
+            <span class="telemetry-label">Rel. altitude</span>
+            <span class="telemetry-value" id="rel-alt">—</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Flight Commands</h2>
+        <div class="button-row">
+          <button id="btn-arm" class="btn btn-primary" data-endpoint="/api/arm">Arm</button>
+          <button id="btn-takeoff" class="btn btn-primary" data-endpoint="/api/takeoff">Takeoff</button>
+          <button id="btn-land" class="btn btn-danger" data-endpoint="/api/land">Land</button>
+          <button id="btn-rtl" class="btn" data-endpoint="/api/rtl">Return to Launch</button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Manual Control</h2>
+        <p class="hint">
+          Sequence: Takeoff &rarr; Manual: ON &rarr; fly &rarr; Manual: OFF, then Land or RTL.
+        </p>
+        <div class="button-row">
+          <button id="btn-manual-toggle" class="btn">Manual: OFF</button>
+        </div>
+
+        <div class="manual-controls">
+          <div class="joystick" id="joystick-move" data-label="Move (W/S/A/D)">
+            <div class="joystick-base">
+              <div class="joystick-stick" id="stick-move"></div>
+            </div>
+            <span class="joystick-label">Move</span>
+          </div>
+          <div class="joystick" id="joystick-vert" data-label="Vert/Yaw (R/F, Q/E)">
+            <div class="joystick-base">
+              <div class="joystick-stick" id="stick-vert"></div>
+            </div>
+            <span class="joystick-label">Vert / Yaw</span>
+          </div>
+        </div>
+
+        <div class="velocity-readout">
+          <div class="telemetry-card">
+            <span class="telemetry-label">Forward / Right</span>
+            <span class="telemetry-value" id="vel-horizontal">0.00 / 0.00</span>
+          </div>
+          <div class="telemetry-card">
+            <span class="telemetry-label">Up / Yaw</span>
+            <span class="telemetry-value" id="vel-vertical">0.00 / 0.00</span>
+          </div>
+        </div>
+
+        <p class="hint">
+          Keyboard (when Manual: ON): W/S forward/back, A/D strafe, Q/E yaw, R/F up/down.
+        </p>
+      </section>
+
+      <section class="panel">
+        <h2>Mission Planning</h2>
+
+        <div class="mission-controls">
+          <button id="btn-plan-toggle" class="btn">Plan mission: OFF</button>
+          <div class="field">
+            <label for="mission-altitude">Altitude (m)</label>
+            <input type="number" id="mission-altitude" value="10" min="1" step="1" />
+          </div>
+          <button id="btn-clear-waypoints" class="btn btn-ghost">Clear</button>
+        </div>
+
+        <ol id="waypoint-list" class="waypoint-list"></ol>
+
+        <div class="mission-controls">
+          <button id="btn-upload-mission" class="btn btn-primary" data-endpoint="/api/mission/upload">Upload mission</button>
+          <button class="btn btn-primary" data-endpoint="/api/mission/start">Start mission</button>
+          <button class="btn btn-ghost" data-endpoint="/api/mission/pause">Pause mission</button>
+        </div>
+      </section>
+
+      <div id="command-status" class="command-status"></div>
+    </aside>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>
