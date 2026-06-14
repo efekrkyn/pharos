@@ -55,6 +55,12 @@ MANUAL_MAX_HORIZONTAL_M_S = 8.0
 MANUAL_MAX_VERTICAL_M_S = 4.0
 MANUAL_MAX_YAW_RATE_RAD_S = 2.0
 
+# How long to let takeoff() start the climb before sending mission.start_mission().
+# PX4 auto-disarms ~10s after arming if it never sees a takeoff/flight-mode
+# transition, so this must be short enough that arm -> takeoff -> mission start
+# all happen well within that window.
+PLAN_TAKEOFF_SETTLE_S = 2.0
+
 ActionFn = Callable[[System], Awaitable[None]]
 hub = TelemetryHub()
 
@@ -793,13 +799,44 @@ class PlanExecuteRequest(BaseModel):
     waypoints: list[Waypoint]
 
 
+async def _fly_plan_action(drone: System, altitude: float) -> None:
+    """Arm, start climbing to the plan's altitude, and start the uploaded mission.
+
+    Mirrors the manual Takeoff -> Start mission flow, but automated: PX4
+    requires the vehicle to be armed and transitioning into a flight mode
+    (e.g. takeoff) within ~10s of arming, or it auto-disarms ("Disarmed by
+    auto preflight disarming"). Arming and immediately calling
+    mission.start_mission() while still on the ground isn't reliably accepted,
+    so we arm, command a takeoff to the plan's altitude, give it a moment to
+    leave the ground, then start the mission — PX4 transitions from takeoff
+    into mission navigation seamlessly.
+    """
+    with contextlib.suppress(ActionError):
+        await drone.action.arm()
+    await drone.action.set_takeoff_altitude(altitude)
+    await drone.action.takeoff()
+    await asyncio.sleep(PLAN_TAKEOFF_SETTLE_S)
+
+    await drone.mission.start_mission()
+    logger.info("mission.start_mission() accepted")
+
+
 @app.post("/api/plan/execute")
 async def execute_plan(request: PlanExecuteRequest) -> JSONResponse:
-    """Upload an approved plan as a mission and start it, reusing the existing mission flow."""
+    """Upload an approved plan as a mission, then arm/takeoff/start it.
+
+    Reuses upload_mission() for the upload step; see _fly_plan_action() for
+    why arm+takeoff+start (not just start_mission()) is needed to actually
+    get the vehicle airborne.
+    """
+    state = _get_drone(request.drone_id)
+    if isinstance(state, JSONResponse):
+        return state
+
     upload_result = await upload_mission(
         request.drone_id, MissionUploadRequest(altitude=request.altitude, waypoints=request.waypoints)
     )
     if json.loads(upload_result.body).get("ok") is not True:
         return upload_result
 
-    return await start_mission(request.drone_id)
+    return await _run_command(state, lambda d: _fly_plan_action(d, request.altitude))
