@@ -123,6 +123,22 @@
         <div id="mission-progress" class="mission-progress">No active mission</div>
       </section>
 
+      <section class="panel">
+        <h2>Geofence</h2>
+
+        <div class="mission-controls">
+          <button id="btn-geofence-toggle" class="btn">Draw geofence: OFF</button>
+          <button id="btn-geofence-clear" class="btn btn-ghost">Clear</button>
+        </div>
+
+        <div id="geofence-vertex-count" class="mission-progress">No geofence drawn</div>
+
+        <div class="mission-controls">
+          <button id="btn-geofence-upload" class="btn btn-primary" data-endpoint="/api/geofence/upload">Upload geofence</button>
+          <button id="btn-geofence-clear-vehicle" class="btn btn-danger" data-endpoint="/api/geofence/clear">Clear on vehicle</button>
+        </div>
+      </section>
+
       <div id="command-status" class="command-status"></div>
     </aside>
   </div>

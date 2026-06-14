@@ -12,8 +12,10 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from mavsdk import System
 from mavsdk.action import ActionError
+from mavsdk.geofence import FenceType, GeofenceData, GeofenceError, Point, Polygon
 from mavsdk.mission import MissionError, MissionItem, MissionPlan
 from mavsdk.offboard import OffboardError, VelocityBodyYawspeed
+from mavsdk.param import ParamError
 from pydantic import BaseModel
 
 from drone.connection import ConnectionTimeoutError, connect_drone
@@ -29,6 +31,12 @@ TAKEOFF_ALTITUDE_M = 5.0
 # waypoint before it's considered reached. Reasonable defaults for SITL.
 MISSION_SPEED_M_S = 5.0
 MISSION_ACCEPTANCE_RADIUS_M = 2.0
+
+# PX4's GF_ACTION parameter: what the vehicle does on a geofence breach.
+# 0=None, 1=Warning, 2=Hold, 3=Return, 4=Terminate, 5=Land. We set this to
+# Hold whenever a geofence is uploaded so breaches are actually enforced
+# and observable (the vehicle stops and hovers at the fence).
+GF_ACTION_HOLD = 2
 
 # Manual control: how fast we re-send velocity setpoints, and the speed
 # limits applied to incoming /api/manual/command values.
@@ -56,6 +64,12 @@ manual_task: asyncio.Task | None = None
 # clients keep working unchanged and new clients get progress "for free".
 # total == 0 means no mission is active.
 mission_state = {"mission_current": 0, "mission_total": 0}
+
+# Latest vehicle heading (compass heading, degrees clockwise from north),
+# merged into every telemetry broadcast the same way as mission_state. Used
+# by the frontend to convert the move joystick's map-relative (north/east)
+# intent into the drone's forward/right body frame. None until known.
+heading_state = {"heading_deg": None}
 
 
 async def telemetry_task() -> None:
@@ -85,6 +99,7 @@ async def telemetry_task() -> None:
                         "abs_alt": position.absolute_altitude_m,
                         "rel_alt": position.relative_altitude_m,
                         **mission_state,
+                        **heading_state,
                     }
                 )
         except Exception:
@@ -92,7 +107,8 @@ async def telemetry_task() -> None:
             drone = None
             await _stop_manual_task()
             mission_state.update(mission_current=0, mission_total=0)
-            await hub.broadcast({**WAITING_STATE, **mission_state})
+            heading_state.update(heading_deg=None)
+            await hub.broadcast({**WAITING_STATE, **mission_state, **heading_state})
 
 
 async def mission_progress_task() -> None:
@@ -121,7 +137,7 @@ async def mission_progress_task() -> None:
                 except asyncio.TimeoutError:
                     continue
                 mission_state.update(mission_current=progress.current, mission_total=progress.total)
-                await hub.broadcast({**hub.latest, **mission_state})
+                await hub.broadcast({**hub.latest, **mission_state, **heading_state})
         except StopAsyncIteration:
             await asyncio.sleep(1)
         except Exception:
@@ -129,10 +145,44 @@ async def mission_progress_task() -> None:
             await asyncio.sleep(1)
 
 
+async def heading_task() -> None:
+    """Track telemetry.heading() on the shared connection and broadcast it.
+
+    Merges into the same telemetry messages sent by telemetry_task() (via
+    heading_state), same reconnect-tolerant pattern as mission_progress_task().
+    """
+    while True:
+        current_drone = drone
+        if current_drone is None:
+            await asyncio.sleep(1)
+            continue
+
+        try:
+            stream = current_drone.telemetry.heading()
+            while True:
+                if drone is not current_drone:
+                    break
+                try:
+                    heading = await asyncio.wait_for(stream.__anext__(), timeout=2.0)
+                except asyncio.TimeoutError:
+                    continue
+                heading_state.update(heading_deg=heading.heading_deg)
+                await hub.broadcast({**hub.latest, **mission_state, **heading_state})
+        except StopAsyncIteration:
+            await asyncio.sleep(1)
+        except Exception:
+            logger.exception("Heading stream ended, will retry")
+            await asyncio.sleep(1)
+
+
 @contextlib.asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Start the shared background tasks on startup, cancel them on shutdown."""
-    tasks = [asyncio.create_task(telemetry_task()), asyncio.create_task(mission_progress_task())]
+    tasks = [
+        asyncio.create_task(telemetry_task()),
+        asyncio.create_task(mission_progress_task()),
+        asyncio.create_task(heading_task()),
+    ]
     try:
         yield
     finally:
@@ -182,7 +232,7 @@ async def _run_command(action) -> JSONResponse:
 
     try:
         await action()
-    except (ActionError, MissionError, OffboardError) as exc:
+    except (ActionError, MissionError, OffboardError, GeofenceError, ParamError) as exc:
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
 
     return {"ok": True}
@@ -291,6 +341,45 @@ async def start_mission() -> JSONResponse:
 async def pause_mission() -> JSONResponse:
     """Pause the currently running mission in place."""
     return await _run_command(lambda: drone.mission.pause_mission())
+
+
+class GeofenceUploadRequest(BaseModel):
+    points: list[Waypoint]
+
+
+@app.post("/api/geofence/upload")
+async def upload_geofence(request: GeofenceUploadRequest) -> JSONResponse:
+    """Upload an inclusion geofence polygon to the vehicle.
+
+    The polygon is an inclusion fence: PX4 should keep the vehicle inside
+    it (the breach reaction is controlled by PX4's GF_ACTION parameter,
+    e.g. warn/hold/RTL, and isn't changed here).
+    """
+    if drone is None:
+        return JSONResponse({"ok": False, "error": "Drone not connected"}, status_code=503)
+
+    if len(request.points) < 3:
+        return JSONResponse({"ok": False, "error": "A geofence polygon needs at least 3 points"}, status_code=400)
+
+    polygon = Polygon(
+        [Point(p.lat, p.lon) for p in request.points],
+        FenceType.INCLUSION,
+    )
+    geofence_data = GeofenceData(polygons=[polygon], circles=[])
+
+    async def _upload():
+        await drone.geofence.upload_geofence(geofence_data)
+        # Also make sure PX4 reacts to breaches (Hold), otherwise the
+        # fence is uploaded but enforcement may be a no-op/warning only.
+        await drone.param.set_param_int("GF_ACTION", GF_ACTION_HOLD)
+
+    return await _run_command(_upload)
+
+
+@app.post("/api/geofence/clear")
+async def clear_geofence() -> JSONResponse:
+    """Remove all geofences stored on the vehicle."""
+    return await _run_command(lambda: drone.geofence.clear_geofence())
 
 
 def _clamp(value: float, limit: float) -> float:

@@ -114,7 +114,8 @@ body {
   }
 }
 
-#map.plan-mode {
+#map.plan-mode,
+#map.geofence-mode {
   cursor: crosshair;
 }
 

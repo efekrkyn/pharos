@@ -62,11 +62,20 @@ function updateMap(lat, lon) {
   trail.setLatLngs(trailPoints);
 }
 
+// Latest vehicle heading (degrees clockwise from north), used to convert
+// the move joystick's map-relative (north/east) intent into the drone's
+// forward/right body frame. Stays at 0 (north) until telemetry provides it.
+let currentHeadingDeg = 0;
+
 function renderTelemetry(data) {
   latEl.textContent = formatNumber(data.lat, 7);
   lonEl.textContent = formatNumber(data.lon, 7);
   absAltEl.textContent = formatNumber(data.abs_alt, 2);
   relAltEl.textContent = formatNumber(data.rel_alt, 2);
+
+  if (data.heading_deg !== null && data.heading_deg !== undefined) {
+    currentHeadingDeg = data.heading_deg;
+  }
 
   if (data.status === "connected") {
     setStatus("connected", "Connected");
@@ -163,8 +172,8 @@ async function sendCommand(endpoint, body) {
 }
 
 commandButtons.forEach((button) => {
-  if (button.id === "btn-upload-mission") {
-    // Handled separately below — it needs to send the planned waypoints.
+  if (button.id === "btn-upload-mission" || button.id === "btn-geofence-upload") {
+    // Handled separately below — these need to send extra data.
     return;
   }
   button.addEventListener("click", () => sendCommand(button.dataset.endpoint));
@@ -229,6 +238,8 @@ function clearWaypoints() {
 map.on("click", (event) => {
   if (planMode) {
     addWaypoint(event.latlng);
+  } else if (geofenceDrawMode) {
+    addGeofenceVertex(event.latlng);
   }
 });
 
@@ -236,7 +247,15 @@ planToggleButton.addEventListener("click", () => {
   planMode = !planMode;
   planToggleButton.textContent = `Plan mission: ${planMode ? "ON" : "OFF"}`;
   planToggleButton.classList.toggle("active", planMode);
+
+  if (planMode && geofenceDrawMode) {
+    geofenceDrawMode = false;
+    geofenceToggleButton.textContent = "Draw geofence: OFF";
+    geofenceToggleButton.classList.remove("active");
+  }
+
   mapEl.classList.toggle("plan-mode", planMode);
+  mapEl.classList.toggle("geofence-mode", geofenceDrawMode);
 });
 
 clearWaypointsButton.addEventListener("click", clearWaypoints);
@@ -252,6 +271,69 @@ uploadMissionButton.addEventListener("click", () => {
     waypoints: waypoints.map((wp) => ({ lat: wp.lat, lon: wp.lon })),
   };
   sendCommand("/api/mission/upload", body);
+});
+
+// --- Geofence -----------------------------------------------------------
+
+const geofenceToggleButton = document.getElementById("btn-geofence-toggle");
+const geofenceClearButton = document.getElementById("btn-geofence-clear");
+const geofenceUploadButton = document.getElementById("btn-geofence-upload");
+const geofenceVertexCountEl = document.getElementById("geofence-vertex-count");
+
+let geofenceDrawMode = false;
+
+// Each entry is { lat, lon }. The polygon mirrors this order.
+const geofenceVertices = [];
+const geofencePolygon = L.polygon([], {
+  color: "#f87171",
+  weight: 2,
+  fillColor: "#f87171",
+  fillOpacity: 0.15,
+}).addTo(map);
+
+function renderGeofence() {
+  geofencePolygon.setLatLngs(geofenceVertices.map((v) => [v.lat, v.lon]));
+  geofenceVertexCountEl.textContent =
+    geofenceVertices.length === 0
+      ? "No geofence drawn"
+      : `${geofenceVertices.length} vertex${geofenceVertices.length === 1 ? "" : "es"}`;
+}
+
+function addGeofenceVertex(latlng) {
+  geofenceVertices.push({ lat: latlng.lat, lon: latlng.lng });
+  renderGeofence();
+}
+
+function clearGeofenceDrawing() {
+  geofenceVertices.length = 0;
+  renderGeofence();
+}
+
+geofenceToggleButton.addEventListener("click", () => {
+  geofenceDrawMode = !geofenceDrawMode;
+  geofenceToggleButton.textContent = `Draw geofence: ${geofenceDrawMode ? "ON" : "OFF"}`;
+  geofenceToggleButton.classList.toggle("active", geofenceDrawMode);
+
+  if (geofenceDrawMode && planMode) {
+    planMode = false;
+    planToggleButton.textContent = "Plan mission: OFF";
+    planToggleButton.classList.remove("active");
+  }
+
+  mapEl.classList.toggle("plan-mode", planMode);
+  mapEl.classList.toggle("geofence-mode", geofenceDrawMode);
+});
+
+geofenceClearButton.addEventListener("click", clearGeofenceDrawing);
+
+geofenceUploadButton.addEventListener("click", () => {
+  if (geofenceVertices.length < 3) {
+    showCommandResult("error", "/api/geofence/upload: need at least 3 points");
+    return;
+  }
+
+  const body = { points: geofenceVertices.map((v) => ({ lat: v.lat, lon: v.lon })) };
+  sendCommand("/api/geofence/upload", body);
 });
 
 // --- Manual control -----------------------------------------------------
@@ -308,8 +390,16 @@ function computeVelocity() {
     if (mapping.axis === "yaw") yaw += mapping.sign * KEY_YAW_SPEED;
   }
 
-  forward += joyMove.y * MANUAL_MAX_HORIZONTAL;
-  right += joyMove.x * MANUAL_MAX_HORIZONTAL;
+  // Move joystick is map-relative: "up" always means map-north and "right"
+  // always means map-east, regardless of which way the drone is facing.
+  // Rotate that north/east intent into the drone's forward/right body frame
+  // using its current compass heading.
+  const northCmd = joyMove.y * MANUAL_MAX_HORIZONTAL;
+  const eastCmd = joyMove.x * MANUAL_MAX_HORIZONTAL;
+  const headingRad = (currentHeadingDeg * Math.PI) / 180;
+  forward += northCmd * Math.cos(headingRad) + eastCmd * Math.sin(headingRad);
+  right += eastCmd * Math.cos(headingRad) - northCmd * Math.sin(headingRad);
+
   up += joyVert.y * MANUAL_MAX_VERTICAL;
   yaw += joyVert.x * MANUAL_MAX_YAW;
 
@@ -444,9 +534,9 @@ const resetMoveStick = setupJoystick(
   document.querySelector("#joystick-move .joystick-base"),
   document.getElementById("stick-move"),
   (x, y) => {
-    // Both axes are inverted relative to the drone's body frame for this
-    // stick: pushing forward/right should move the drone forward/right.
-    joyMove = { x: -x, y: -y };
+    // x is positive when dragging right, y is positive when dragging up —
+    // matches "right" (strafe right) and "forward" directly, no inversion.
+    joyMove = { x, y };
     updateVelocity();
   }
 );
