@@ -30,6 +30,7 @@ const absAltEl = document.getElementById("abs-alt");
 const relAltEl = document.getElementById("rel-alt");
 const controllingDroneLabelEl = document.getElementById("controlling-drone-label");
 const dronesListEl = document.getElementById("drones-list");
+const aiTargetDroneEl = document.getElementById("ai-target-drone");
 
 const map = L.map("map").setView(DEFAULT_VIEW, DEFAULT_ZOOM);
 L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
@@ -334,6 +335,8 @@ function selectDrone(droneId) {
   }
   selectedDrone = droneId;
   controllingDroneLabelEl.textContent = DRONE_LABELS[droneId];
+  aiTargetDroneEl.textContent = DRONE_LABELS[droneId];
+  clearAiPlan();
 
   loadChartsForDrone(droneId);
   renderSelectedTelemetry(drones[droneId].latest);
@@ -871,4 +874,146 @@ manualToggleButton.addEventListener("click", async () => {
   } finally {
     manualToggleButton.disabled = false;
   }
+});
+
+// --- AI Command -----------------------------------------------------------
+
+const aiChatLogEl = document.getElementById("ai-chat-log");
+const aiPromptInput = document.getElementById("ai-prompt-input");
+const aiSendButton = document.getElementById("btn-ai-send");
+const aiPlanActionsEl = document.getElementById("ai-plan-actions");
+const aiApproveButton = document.getElementById("btn-ai-approve");
+const aiDiscardButton = document.getElementById("btn-ai-discard");
+
+// The pending plan awaiting approval, or null. Targets whichever drone was
+// selected when the plan was generated.
+let currentAiPlan = null;
+
+const aiProposedRoute = L.polyline([], { color: "#a78bfa", weight: 2, dashArray: "2 6" }).addTo(map);
+let aiProposedMarkers = [];
+
+function aiWaypointIcon(number) {
+  return L.divIcon({
+    className: "ai-waypoint-icon",
+    html: String(number),
+    iconSize: [24, 24],
+  });
+}
+
+function appendChatMessage(role, text) {
+  const div = document.createElement("div");
+  div.className = `ai-message ai-message-${role}`;
+  div.textContent = text;
+  aiChatLogEl.appendChild(div);
+  aiChatLogEl.scrollTop = aiChatLogEl.scrollHeight;
+  return div;
+}
+
+function showAiPlan(plan) {
+  currentAiPlan = { drone_id: selectedDrone, altitude: plan.altitude, waypoints: plan.waypoints };
+
+  const waypointLines = plan.waypoints
+    .map((wp, i) => `  #${i + 1}: ${wp.lat.toFixed(6)}, ${wp.lon.toFixed(6)}`)
+    .join("\n");
+  let text = `${plan.summary}\nAltitude: ${plan.altitude}m, ${plan.waypoints.length} waypoints:\n${waypointLines}`;
+  if (plan.notes) {
+    text += `\n${plan.notes}`;
+  }
+  appendChatMessage("assistant", text);
+
+  aiProposedRoute.setLatLngs(plan.waypoints.map((wp) => [wp.lat, wp.lon]));
+  aiProposedMarkers = plan.waypoints.map((wp, i) =>
+    L.marker([wp.lat, wp.lon], { icon: aiWaypointIcon(i + 1) }).addTo(map)
+  );
+
+  aiPlanActionsEl.style.display = "flex";
+}
+
+function clearAiPlan() {
+  currentAiPlan = null;
+  aiProposedRoute.setLatLngs([]);
+  aiProposedMarkers.forEach((marker) => map.removeLayer(marker));
+  aiProposedMarkers = [];
+  aiPlanActionsEl.style.display = "none";
+}
+
+async function sendAiPrompt() {
+  const prompt = aiPromptInput.value.trim();
+  if (!prompt) {
+    return;
+  }
+
+  appendChatMessage("user", prompt);
+  aiPromptInput.value = "";
+  clearAiPlan();
+
+  aiSendButton.disabled = true;
+  aiPromptInput.disabled = true;
+  const statusMessage = appendChatMessage("status", `Asking the planner for ${DRONE_LABELS[selectedDrone]}...`);
+
+  try {
+    const response = await fetch("/api/plan", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt, drone_id: selectedDrone }),
+    });
+    const data = await response.json();
+    statusMessage.remove();
+
+    if (data.ok) {
+      showAiPlan(data.plan);
+    } else {
+      appendChatMessage("error", data.error || "Plan request failed");
+    }
+  } catch (err) {
+    statusMessage.remove();
+    appendChatMessage("error", `Request failed (${err.message})`);
+  } finally {
+    aiSendButton.disabled = false;
+    aiPromptInput.disabled = false;
+    aiPromptInput.focus();
+  }
+}
+
+aiSendButton.addEventListener("click", sendAiPrompt);
+aiPromptInput.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") {
+    sendAiPrompt();
+  }
+});
+
+aiApproveButton.addEventListener("click", async () => {
+  if (!currentAiPlan) {
+    return;
+  }
+
+  const plan = currentAiPlan;
+  aiApproveButton.disabled = true;
+  aiDiscardButton.disabled = true;
+
+  try {
+    const response = await fetch("/api/plan/execute", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(plan),
+    });
+    const data = await response.json();
+
+    if (data.ok) {
+      appendChatMessage("status", `${DRONE_LABELS[plan.drone_id]}: mission uploaded and started.`);
+    } else {
+      appendChatMessage("error", data.error || "Execution failed");
+    }
+  } catch (err) {
+    appendChatMessage("error", `Request failed (${err.message})`);
+  } finally {
+    clearAiPlan();
+    aiApproveButton.disabled = false;
+    aiDiscardButton.disabled = false;
+  }
+});
+
+aiDiscardButton.addEventListener("click", () => {
+  appendChatMessage("status", "Plan discarded.");
+  clearAiPlan();
 });

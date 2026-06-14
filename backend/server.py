@@ -2,12 +2,14 @@
 
 import asyncio
 import contextlib
+import json
 import logging
 import math
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from dotenv import load_dotenv
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -19,8 +21,11 @@ from mavsdk.offboard import OffboardError, VelocityBodyYawspeed
 from mavsdk.param import ParamError
 from pydantic import BaseModel
 
+import llm_planner
 from drone.connection import ConnectionTimeoutError, connect_drone
 from telemetry_hub import TelemetryHub
+
+load_dotenv()
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -749,3 +754,52 @@ async def manual_stop(drone_id: str) -> JSONResponse:
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
 
     return JSONResponse({"ok": True})
+
+
+class PlanRequest(BaseModel):
+    prompt: str
+    drone_id: str
+
+
+@app.post("/api/plan")
+async def plan_mission(request: PlanRequest) -> JSONResponse:
+    """Turn a natural-language request into a structured mission plan for approval.
+
+    Does NOT execute anything — the returned plan must be sent back to
+    /api/plan/execute (after user approval) to actually fly it.
+    """
+    state = _get_drone(request.drone_id)
+    if isinstance(state, JSONResponse):
+        return state
+
+    latest = hub.latest.get(state.drone_id)
+    if not latest or latest.get("lat") is None or latest.get("lon") is None:
+        return JSONResponse(
+            {"ok": False, "error": "Drone position unknown — wait for a telemetry fix before planning"},
+            status_code=503,
+        )
+
+    try:
+        plan = await llm_planner.generate_plan(request.prompt, latest["lat"], latest["lon"])
+    except llm_planner.PlanError as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+
+    return JSONResponse({"ok": True, "plan": plan})
+
+
+class PlanExecuteRequest(BaseModel):
+    drone_id: str
+    altitude: float
+    waypoints: list[Waypoint]
+
+
+@app.post("/api/plan/execute")
+async def execute_plan(request: PlanExecuteRequest) -> JSONResponse:
+    """Upload an approved plan as a mission and start it, reusing the existing mission flow."""
+    upload_result = await upload_mission(
+        request.drone_id, MissionUploadRequest(altitude=request.altitude, waypoints=request.waypoints)
+    )
+    if json.loads(upload_result.body).get("ok") is not True:
+        return upload_result
+
+    return await start_mission(request.drone_id)

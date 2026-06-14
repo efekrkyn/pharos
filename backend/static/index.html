@@ -40,6 +40,23 @@
       </section>
 
       <section class="panel">
+        <h2>AI Command</h2>
+        <p class="hint">
+          Type a recon/navigation command for the selected drone (<strong id="ai-target-drone">D0</strong>),
+          in Turkish or English.
+        </p>
+        <div id="ai-chat-log" class="ai-chat-log"></div>
+        <div id="ai-plan-actions" class="ai-plan-actions" style="display: none">
+          <button id="btn-ai-approve" class="btn btn-primary">Approve &amp; fly</button>
+          <button id="btn-ai-discard" class="btn btn-ghost">Discard</button>
+        </div>
+        <div class="ai-input-row">
+          <input type="text" id="ai-prompt-input" placeholder="e.g. Survey this area in a grid at 15m" />
+          <button id="btn-ai-send" class="btn btn-primary">Send</button>
+        </div>
+      </section>
+
+      <section class="panel">
         <h2>Telemetry</h2>
         <div class="controlling-indicator">Controlling: <strong id="controlling-drone-label">D0</strong></div>
         <div class="telemetry-grid">

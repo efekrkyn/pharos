@@ -565,6 +565,103 @@ body {
   color: var(--accent);
 }
 
+/* --- AI Command ---------------------------------------------------------- */
+
+.ai-chat-log {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  max-height: 14rem;
+  overflow-y: auto;
+  margin-bottom: 0.6rem;
+}
+
+.ai-chat-log:empty::before {
+  content: 'Type a navigation/recon command below, e.g. "Survey this area in a grid at 15m".';
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.ai-message {
+  padding: 0.5rem 0.65rem;
+  border-radius: 0.375rem;
+  font-size: 0.85rem;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.ai-message-user {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+
+.ai-message-assistant {
+  background: rgba(45, 212, 191, 0.08);
+  border: 1px solid var(--accent-dim);
+  color: var(--text);
+}
+
+.ai-message-status {
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.ai-message-error {
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  color: var(--danger);
+  border: 1px solid var(--danger);
+  background: rgba(248, 113, 113, 0.08);
+}
+
+.ai-input-row {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.ai-input-row input[type="text"] {
+  flex: 1;
+  padding: 0.55rem 0.7rem;
+  font-family: var(--sans);
+  font-size: 0.9rem;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 0.375rem;
+  color: var(--text);
+}
+
+.ai-input-row input[type="text"]:focus-visible {
+  outline: none;
+  border-color: var(--accent-hi);
+  box-shadow: 0 0 0 2px var(--accent-hi);
+}
+
+.ai-plan-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.6rem;
+}
+
+.ai-waypoint-icon {
+  background: #a78bfa;
+  color: #1a1530;
+  border-radius: 50%;
+  width: 1.5rem;
+  height: 1.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  font-weight: 700;
+  border: 2px solid var(--text);
+  box-shadow: 0 0 6px rgba(167, 139, 250, 0.6);
+}
+
 .waypoint-icon {
   background: #f59e0b;
   color: #1a1306;
