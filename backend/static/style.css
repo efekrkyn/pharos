@@ -435,6 +435,136 @@ body {
   box-shadow: 0 0 10px var(--accent-hi), 0 0 2px #ffffff inset;
 }
 
+.drone-marker {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  pointer-events: none;
+}
+
+.drone-marker .drone-dot {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 2px solid var(--text);
+  box-shadow: 0 0 2px #ffffff inset;
+}
+
+.drone-marker .drone-marker-label {
+  margin-top: 2px;
+  padding: 1px 4px;
+  font-family: var(--mono);
+  font-size: 0.65rem;
+  font-weight: 700;
+  line-height: 1.3;
+  color: var(--text);
+  background: rgba(10, 15, 16, 0.75);
+  border-radius: 3px;
+  white-space: nowrap;
+}
+
+/* --- Drones panel --------------------------------------------------------- */
+
+.drones-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-bottom: 0.85rem;
+}
+
+.drone-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.5rem 0.6rem;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 0.375rem;
+  cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.drone-row:hover {
+  border-color: var(--accent-dim);
+}
+
+.drone-row.selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 8px var(--accent-hi);
+}
+
+.drone-row .drone-badge {
+  width: 1.7rem;
+  height: 1.7rem;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--mono);
+  font-weight: 700;
+  font-size: 0.75rem;
+  color: #04201d;
+  flex-shrink: 0;
+}
+
+.drone-row .drone-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  flex: 1;
+  min-width: 0;
+}
+
+.drone-row .drone-info-top {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.drone-row .drone-info-line {
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.drone-row .status-dot {
+  width: 0.5rem;
+  height: 0.5rem;
+}
+
+/* --- Per-drone colors ----------------------------------------------------- */
+
+.drone-color-drone0 {
+  background: #2dd4bf;
+  box-shadow: 0 0 10px #2dd4bfaa;
+}
+
+.drone-color-drone1 {
+  background: #22d3ee;
+  box-shadow: 0 0 10px #22d3eeaa;
+}
+
+.drone-color-drone2 {
+  background: #f472b6;
+  box-shadow: 0 0 10px #f472b6aa;
+}
+
+/* --- Controlling-drone indicator ------------------------------------------ */
+
+.controlling-indicator {
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  margin-bottom: 0.6rem;
+}
+
+.controlling-indicator strong {
+  color: var(--accent);
+}
+
 .waypoint-icon {
   background: #f59e0b;
   color: #1a1306;

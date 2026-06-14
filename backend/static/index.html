@@ -29,7 +29,19 @@
 
     <aside class="sidebar">
       <section class="panel">
+        <h2>Drones</h2>
+        <div id="drones-list" class="drones-list"></div>
+        <div class="button-row">
+          <button class="btn btn-primary" data-all-endpoint="/api/all/arm">Arm all</button>
+          <button class="btn btn-primary" data-all-endpoint="/api/all/takeoff">Takeoff all</button>
+          <button class="btn btn-danger" data-all-endpoint="/api/all/land">Land all</button>
+          <button class="btn" data-all-endpoint="/api/all/rtl">RTL all</button>
+        </div>
+      </section>
+
+      <section class="panel">
         <h2>Telemetry</h2>
+        <div class="controlling-indicator">Controlling: <strong id="controlling-drone-label">D0</strong></div>
         <div class="telemetry-grid">
           <div class="telemetry-card">
             <span class="telemetry-label">Latitude</span>
@@ -76,10 +88,10 @@
       <section class="panel">
         <h2>Flight Commands</h2>
         <div class="button-row">
-          <button id="btn-arm" class="btn btn-primary" data-endpoint="/api/arm">Arm</button>
-          <button id="btn-takeoff" class="btn btn-primary" data-endpoint="/api/takeoff">Takeoff</button>
-          <button id="btn-land" class="btn btn-danger" data-endpoint="/api/land">Land</button>
-          <button id="btn-rtl" class="btn" data-endpoint="/api/rtl">Return to Launch</button>
+          <button id="btn-arm" class="btn btn-primary" data-endpoint="/api/{drone}/arm">Arm</button>
+          <button id="btn-takeoff" class="btn btn-primary" data-endpoint="/api/{drone}/takeoff">Takeoff</button>
+          <button id="btn-land" class="btn btn-danger" data-endpoint="/api/{drone}/land">Land</button>
+          <button id="btn-rtl" class="btn" data-endpoint="/api/{drone}/rtl">Return to Launch</button>
         </div>
       </section>
 
@@ -138,9 +150,9 @@
         <ol id="waypoint-list" class="waypoint-list"></ol>
 
         <div class="mission-controls">
-          <button id="btn-upload-mission" class="btn btn-primary" data-endpoint="/api/mission/upload">Upload mission</button>
-          <button class="btn btn-primary" data-endpoint="/api/mission/start">Start mission</button>
-          <button class="btn btn-ghost" data-endpoint="/api/mission/pause">Pause mission</button>
+          <button id="btn-upload-mission" class="btn btn-primary" data-endpoint="/api/{drone}/mission/upload">Upload mission</button>
+          <button class="btn btn-primary" data-endpoint="/api/{drone}/mission/start">Start mission</button>
+          <button class="btn btn-ghost" data-endpoint="/api/{drone}/mission/pause">Pause mission</button>
         </div>
 
         <div id="mission-progress" class="mission-progress">No active mission</div>
@@ -157,8 +169,8 @@
         <div id="geofence-vertex-count" class="mission-progress">No geofence drawn</div>
 
         <div class="mission-controls">
-          <button id="btn-geofence-upload" class="btn btn-primary" data-endpoint="/api/geofence/upload">Upload geofence</button>
-          <button id="btn-geofence-clear-vehicle" class="btn btn-danger" data-endpoint="/api/geofence/clear">Clear on vehicle</button>
+          <button id="btn-geofence-upload" class="btn btn-primary" data-endpoint="/api/{drone}/geofence/upload">Upload geofence</button>
+          <button id="btn-geofence-clear-vehicle" class="btn btn-danger" data-endpoint="/api/{drone}/geofence/clear">Clear on vehicle</button>
         </div>
       </section>
 

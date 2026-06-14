@@ -9,6 +9,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_SYSTEM_ADDRESS = "udp://:14540"
 DEFAULT_CONNECT_TIMEOUT = 10.0
+DEFAULT_MAVSDK_SERVER_PORT = 50051
 
 
 class ConnectionTimeoutError(RuntimeError):
@@ -18,6 +19,7 @@ class ConnectionTimeoutError(RuntimeError):
 async def connect_drone(
     system_address: str = DEFAULT_SYSTEM_ADDRESS,
     timeout: float = DEFAULT_CONNECT_TIMEOUT,
+    port: int = DEFAULT_MAVSDK_SERVER_PORT,
 ) -> System:
     """Connect to a drone over MAVLink and wait until it is ready.
 
@@ -26,6 +28,9 @@ async def connect_drone(
             on UDP port 14540 by default, so the listening address is
             "udp://:14540".
         timeout: Seconds to wait for the "connected" state before giving up.
+        port: gRPC port for the mavsdk_server instance MAVSDK spawns for this
+            System. Each concurrent System() needs its own port (default
+            50051) to avoid colliding with other instances.
 
     Returns:
         A System object connected to the drone.
@@ -33,7 +38,7 @@ async def connect_drone(
     Raises:
         ConnectionTimeoutError: If no connection is established in time.
     """
-    drone = System()
+    drone = System(port=port)
 
     logger.info("Connecting to drone at %s ...", system_address)
     await drone.connect(system_address=system_address)

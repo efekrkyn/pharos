@@ -59,11 +59,17 @@ FastAPI backend (server.py)
 Browser frontend (Leaflet + vanilla JS)
 ```
 
-The backend maintains a single MAVSDK connection to PX4 and three background
-tasks (telemetry, mission progress, heading), broadcasting merged state to all
-connected browser clients over a WebSocket. Flight commands, mission uploads,
-geofence uploads, and manual control setpoints are sent as REST calls that
-translate directly into MAVSDK action/mission/offboard/geofence calls.
+The backend maintains a MAVSDK connection per drone (3 by default, ports
+14540/14541/14542) and runs five background tasks per drone (telemetry,
+mission progress, heading, ground speed, battery), broadcasting each drone's
+state — tagged with a `drone_id` — to all connected browser clients over a
+single WebSocket. Flight commands, mission uploads, geofence uploads, and
+manual control setpoints are sent as REST calls to `/api/<drone_id>/...`,
+translating directly into MAVSDK action/mission/offboard/geofence calls.
+`/api/all/...` endpoints fan a command out to every connected drone. The
+frontend shows every drone on the map; single-drone panels (telemetry,
+charts, manual control, mission planning, geofence) operate on whichever
+drone is currently selected in the Drones panel.
 
 ---
 
@@ -128,5 +134,5 @@ Pharos is built incrementally as a learning and portfolio project. Possible
 next steps:
 
 - Flight-log analysis and replay
-- Multi-drone / swarm support
-- Telemetry charts (altitude, speed, battery over time)
+- ~~Multi-drone / swarm support~~ (done — see `scripts/start_swarm.sh`)
+- ~~Telemetry charts (altitude, speed, battery over time)~~ (done)

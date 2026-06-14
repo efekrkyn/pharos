@@ -5,8 +5,22 @@ const RECONNECT_DELAY_MS = 1000;
 const DEFAULT_VIEW = [39.9228214, 32.8618589];
 const DEFAULT_ZOOM = 16;
 
-// Cap how many trail points we keep so the polyline stays lightweight.
+// Cap how many trail points we keep so each polyline stays lightweight.
 const MAX_TRAIL_POINTS = 200;
+
+// Rolling window: how many telemetry samples each chart keeps before old
+// points scroll off the left edge.
+const MAX_CHART_POINTS = 120;
+
+// The swarm: ids match the backend's DRONES keys, labels match the "label"
+// field the backend sends in each telemetry message.
+const DRONE_IDS = ["drone0", "drone1", "drone2"];
+const DRONE_LABELS = { drone0: "D0", drone1: "D1", drone2: "D2" };
+
+// Currently-selected drone: the single-drone panels (telemetry, charts,
+// flight commands, manual control, mission planning, geofence) all operate
+// on this one.
+let selectedDrone = "drone0";
 
 const statusDotEl = document.getElementById("status-dot");
 const statusTextEl = document.getElementById("status-text");
@@ -14,6 +28,8 @@ const latEl = document.getElementById("lat");
 const lonEl = document.getElementById("lon");
 const absAltEl = document.getElementById("abs-alt");
 const relAltEl = document.getElementById("rel-alt");
+const controllingDroneLabelEl = document.getElementById("controlling-drone-label");
+const dronesListEl = document.getElementById("drones-list");
 
 const map = L.map("map").setView(DEFAULT_VIEW, DEFAULT_ZOOM);
 L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
@@ -22,15 +38,6 @@ L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
   subdomains: "abcd",
   maxZoom: 20,
 }).addTo(map);
-
-// A small turquoise dot for the live drone position, distinct from the
-// amber numbered markers used for planned mission waypoints.
-const droneIcon = L.divIcon({ className: "drone-icon", iconSize: [16, 16] });
-
-// Marker and trail are created lazily on the first real position fix.
-let droneMarker = null;
-let trail = null;
-const trailPoints = [];
 
 function formatNumber(value, digits) {
   return value === null || value === undefined ? "—" : value.toFixed(digits);
@@ -41,37 +48,86 @@ function setStatus(cssClass, text) {
   statusTextEl.textContent = text;
 }
 
-function updateMap(lat, lon) {
-  const position = [lat, lon];
+// --- Per-drone runtime state ----------------------------------------------
 
-  if (droneMarker === null) {
-    // First fix: create the marker/trail and snap the view to it.
-    droneMarker = L.marker(position, { icon: droneIcon }).addTo(map);
-    trail = L.polyline([position], { color: "#2dd4bf", weight: 2 }).addTo(map);
-    map.setView(position, DEFAULT_ZOOM);
-  } else {
-    // Subsequent fixes: move the existing marker rather than adding new ones.
-    droneMarker.setLatLng(position);
-    map.panTo(position);
-  }
-
-  trailPoints.push(position);
-  if (trailPoints.length > MAX_TRAIL_POINTS) {
-    trailPoints.shift();
-  }
-  trail.setLatLngs(trailPoints);
+function waitingTelemetry(droneId) {
+  return {
+    drone_id: droneId,
+    label: DRONE_LABELS[droneId],
+    status: "waiting",
+    lat: null,
+    lon: null,
+    abs_alt: null,
+    rel_alt: null,
+    mission_current: 0,
+    mission_total: 0,
+    heading_deg: null,
+    ground_speed_m_s: null,
+    battery_percent: null,
+    battery_voltage_v: null,
+  };
 }
 
-// Latest vehicle heading (degrees clockwise from north), used to convert
-// the move joystick's map-relative (north/east) intent into the drone's
-// forward/right body frame. Stays at 0 (north) until telemetry provides it.
+// One entry per drone: live telemetry, map marker/trail, and chart history.
+const drones = {};
+for (const id of DRONE_IDS) {
+  drones[id] = {
+    latest: waitingTelemetry(id),
+    marker: null,
+    trail: null,
+    trailPoints: [],
+    chart: { altitude: [], speed: [], battery: [], batteryEverSeen: false },
+    manualEnabled: false,
+  };
+}
+
+// Snaps the map to the first real position fix received from any drone.
+let initialViewSet = false;
+
+const TRAIL_COLORS = { drone0: "#2dd4bf", drone1: "#22d3ee", drone2: "#f472b6" };
+
+function droneMarkerIcon(droneId) {
+  return L.divIcon({
+    className: "drone-marker",
+    html: `<div class="drone-dot drone-color-${droneId}"></div><div class="drone-marker-label">${DRONE_LABELS[droneId]}</div>`,
+    iconSize: [40, 34],
+    iconAnchor: [8, 8],
+  });
+}
+
+function updateDroneMarker(droneId, lat, lon) {
+  const state = drones[droneId];
+  const position = [lat, lon];
+
+  if (state.marker === null) {
+    state.marker = L.marker(position, { icon: droneMarkerIcon(droneId) }).addTo(map);
+    state.trail = L.polyline([position], { color: TRAIL_COLORS[droneId], weight: 2 }).addTo(map);
+    if (!initialViewSet) {
+      map.setView(position, DEFAULT_ZOOM);
+      initialViewSet = true;
+    }
+  } else {
+    state.marker.setLatLng(position);
+  }
+
+  state.trailPoints.push(position);
+  if (state.trailPoints.length > MAX_TRAIL_POINTS) {
+    state.trailPoints.shift();
+  }
+  state.trail.setLatLngs(state.trailPoints);
+
+  if (droneId === selectedDrone) {
+    map.panTo(position);
+  }
+}
+
+// Latest vehicle heading (degrees clockwise from north) for the selected
+// drone, used to convert the move joystick's map-relative (north/east)
+// intent into the drone's forward/right body frame. Stays at 0 (north)
+// until telemetry provides it.
 let currentHeadingDeg = 0;
 
 // --- Telemetry charts ----------------------------------------------------
-
-// Rolling window: how many telemetry samples each chart keeps before old
-// points scroll off the left edge.
-const MAX_CHART_POINTS = 120;
 
 const CHART_COLOR = "#2dd4bf";
 const CHART_GRID_COLOR = "rgba(230, 244, 241, 0.06)";
@@ -118,8 +174,6 @@ const speedChart = createTelemetryChart("chart-speed", "Ground speed (m/s)");
 const batteryChart = createTelemetryChart("chart-battery", "Battery (%)");
 const batteryChartStatusEl = document.getElementById("battery-chart-status");
 
-let batteryEverSeen = false;
-
 function pushChartPoint(chart, value) {
   const data = chart.data.datasets[0].data;
   chart.data.labels.push("");
@@ -131,47 +185,57 @@ function pushChartPoint(chart, value) {
   chart.update();
 }
 
-function updateCharts(data) {
+function setChartData(chart, values) {
+  chart.data.labels = values.map(() => "");
+  chart.data.datasets[0].data = values.slice();
+  chart.update();
+}
+
+// Records one telemetry sample into droneId's chart history, and if it's
+// the currently-selected drone, also pushes it onto the visible charts.
+function pushChartHistory(droneId, data) {
+  const history = drones[droneId].chart;
   const connected = data.status === "connected";
 
-  pushChartPoint(altitudeChart, connected ? data.rel_alt ?? null : null);
-  pushChartPoint(speedChart, connected ? data.ground_speed_m_s ?? null : null);
-
+  const altitudeValue = connected ? data.rel_alt ?? null : null;
+  const speedValue = connected ? data.ground_speed_m_s ?? null : null;
   const batteryValue = connected ? data.battery_percent ?? null : null;
   if (batteryValue !== null) {
-    batteryEverSeen = true;
+    history.batteryEverSeen = true;
   }
-  pushChartPoint(batteryChart, batteryValue);
 
-  if (!batteryEverSeen) {
-    batteryChartStatusEl.textContent = "No battery data reported by this vehicle.";
-  } else {
-    batteryChartStatusEl.textContent = "";
+  history.altitude.push(altitudeValue);
+  history.speed.push(speedValue);
+  history.battery.push(batteryValue);
+  if (history.altitude.length > MAX_CHART_POINTS) {
+    history.altitude.shift();
+    history.speed.shift();
+    history.battery.shift();
+  }
+
+  if (droneId === selectedDrone) {
+    pushChartPoint(altitudeChart, altitudeValue);
+    pushChartPoint(speedChart, speedValue);
+    pushChartPoint(batteryChart, batteryValue);
+    batteryChartStatusEl.textContent = history.batteryEverSeen
+      ? ""
+      : "No battery data reported by this vehicle.";
   }
 }
 
-function renderTelemetry(data) {
-  latEl.textContent = formatNumber(data.lat, 7);
-  lonEl.textContent = formatNumber(data.lon, 7);
-  absAltEl.textContent = formatNumber(data.abs_alt, 2);
-  relAltEl.textContent = formatNumber(data.rel_alt, 2);
-
-  if (data.heading_deg !== null && data.heading_deg !== undefined) {
-    currentHeadingDeg = data.heading_deg;
-  }
-
-  if (data.status === "connected") {
-    setStatus("connected", "Connected");
-    if (data.lat !== null && data.lon !== null) {
-      updateMap(data.lat, data.lon);
-    }
-  } else {
-    setStatus("waiting", "Waiting for drone");
-  }
-
-  renderMissionProgress(data);
-  updateCharts(data);
+// Replaces the visible charts' data with droneId's history. Called when the
+// selected drone changes.
+function loadChartsForDrone(droneId) {
+  const history = drones[droneId].chart;
+  setChartData(altitudeChart, history.altitude);
+  setChartData(speedChart, history.speed);
+  setChartData(batteryChart, history.battery);
+  batteryChartStatusEl.textContent = history.batteryEverSeen
+    ? ""
+    : "No battery data reported by this vehicle.";
 }
+
+// --- Telemetry / Drones panel rendering ------------------------------------
 
 const missionProgressEl = document.getElementById("mission-progress");
 
@@ -195,6 +259,110 @@ function renderMissionProgress(data) {
   highlightWaypoint(current);
 }
 
+// Updates the telemetry cards, status indicator, mission progress, and
+// charts for the currently-selected drone.
+function renderSelectedTelemetry(data) {
+  latEl.textContent = formatNumber(data.lat, 7);
+  lonEl.textContent = formatNumber(data.lon, 7);
+  absAltEl.textContent = formatNumber(data.abs_alt, 2);
+  relAltEl.textContent = formatNumber(data.rel_alt, 2);
+
+  if (data.heading_deg !== null && data.heading_deg !== undefined) {
+    currentHeadingDeg = data.heading_deg;
+  }
+
+  if (data.status === "connected") {
+    setStatus("connected", `Connected (${DRONE_LABELS[data.drone_id]})`);
+  } else {
+    setStatus("waiting", `Waiting for drone (${DRONE_LABELS[data.drone_id]})`);
+  }
+
+  renderMissionProgress(data);
+}
+
+function renderDronesPanel() {
+  dronesListEl.innerHTML = "";
+
+  for (const id of DRONE_IDS) {
+    const data = drones[id].latest;
+    const row = document.createElement("div");
+    row.className = `drone-row${id === selectedDrone ? " selected" : ""}`;
+    row.addEventListener("click", () => selectDrone(id));
+
+    const badge = document.createElement("div");
+    badge.className = `drone-badge drone-color-${id}`;
+    badge.textContent = DRONE_LABELS[id];
+
+    const info = document.createElement("div");
+    info.className = "drone-info";
+
+    const top = document.createElement("div");
+    top.className = "drone-info-top";
+
+    const dot = document.createElement("span");
+    dot.className = `status-dot ${data.status === "connected" ? "connected" : "waiting"}`;
+
+    const name = document.createElement("span");
+    name.textContent = DRONE_LABELS[id];
+
+    top.appendChild(dot);
+    top.appendChild(name);
+
+    const line = document.createElement("div");
+    line.className = "drone-info-line";
+    if (data.status === "connected" && data.lat !== null && data.lon !== null) {
+      const battery =
+        data.battery_percent !== null && data.battery_percent !== undefined
+          ? `${data.battery_percent.toFixed(0)}%`
+          : "—";
+      line.textContent = `${data.lat.toFixed(5)}, ${data.lon.toFixed(5)} · alt ${formatNumber(data.rel_alt, 1)}m · bat ${battery}`;
+    } else {
+      line.textContent = "Waiting for drone...";
+    }
+
+    info.appendChild(top);
+    info.appendChild(line);
+    row.appendChild(badge);
+    row.appendChild(info);
+    dronesListEl.appendChild(row);
+  }
+}
+
+function selectDrone(droneId) {
+  if (droneId === selectedDrone) {
+    return;
+  }
+  selectedDrone = droneId;
+  controllingDroneLabelEl.textContent = DRONE_LABELS[droneId];
+
+  loadChartsForDrone(droneId);
+  renderSelectedTelemetry(drones[droneId].latest);
+  renderDronesPanel();
+
+  const manualEnabled = drones[droneId].manualEnabled;
+  manualToggleButton.textContent = `Manual: ${manualEnabled ? "ON" : "OFF"}`;
+  manualToggleButton.classList.toggle("active", manualEnabled);
+}
+
+function renderTelemetry(data) {
+  const state = drones[data.drone_id];
+  if (!state) {
+    return;
+  }
+  state.latest = data;
+
+  if (data.status === "connected" && data.lat !== null && data.lon !== null) {
+    updateDroneMarker(data.drone_id, data.lat, data.lon);
+  }
+
+  pushChartHistory(data.drone_id, data);
+  renderDronesPanel();
+
+  if (data.drone_id === selectedDrone) {
+    renderSelectedTelemetry(data);
+  }
+}
+
 function connect() {
   const socket = new WebSocket(WS_URL);
 
@@ -216,21 +384,32 @@ function connect() {
   };
 }
 
+renderDronesPanel();
 connect();
 
 // --- Command buttons -------------------------------------------------
 
 const commandStatusEl = document.getElementById("command-status");
 const commandButtons = document.querySelectorAll("button[data-endpoint]");
+const allCommandButtons = document.querySelectorAll("button[data-all-endpoint]");
+const allDisableableButtons = [...commandButtons, ...allCommandButtons];
 
 function showCommandResult(cssClass, text) {
   commandStatusEl.className = `command-status ${cssClass}`;
   commandStatusEl.textContent = text;
 }
 
+// Endpoint templates use "{drone}" as a placeholder for the currently-
+// selected drone's id (e.g. "/api/{drone}/arm" -> "/api/drone1/arm").
+function resolveEndpoint(endpoint) {
+  return endpoint.replace("{drone}", selectedDrone);
+}
+
 async function sendCommand(endpoint, body) {
+  endpoint = resolveEndpoint(endpoint);
+
   // Disable all command buttons while a request is in flight to avoid double-fires.
-  commandButtons.forEach((button) => (button.disabled = true));
+  allDisableableButtons.forEach((button) => (button.disabled = true));
   showCommandResult("", "Sending...");
 
   try {
@@ -251,7 +430,27 @@ async function sendCommand(endpoint, body) {
   } catch (err) {
     showCommandResult("error", `${endpoint}: request failed (${err.message})`);
   } finally {
-    commandButtons.forEach((button) => (button.disabled = false));
+    allDisableableButtons.forEach((button) => (button.disabled = false));
+  }
+}
+
+// "All drones" commands fan out on the backend and return per-drone results.
+async function sendAllCommand(endpoint) {
+  allDisableableButtons.forEach((button) => (button.disabled = true));
+  showCommandResult("", "Sending...");
+
+  try {
+    const response = await fetch(endpoint, { method: "POST" });
+    const data = await response.json();
+
+    const parts = Object.entries(data.results || {}).map(
+      ([id, result]) => `${DRONE_LABELS[id] || id}: ${result.ok ? "OK" : result.error}`
+    );
+    showCommandResult(data.ok ? "ok" : "error", `${endpoint} — ${parts.join(", ")}`);
+  } catch (err) {
+    showCommandResult("error", `${endpoint}: request failed (${err.message})`);
+  } finally {
+    allDisableableButtons.forEach((button) => (button.disabled = false));
   }
 }
 
@@ -261,6 +460,10 @@ commandButtons.forEach((button) => {
     return;
   }
   button.addEventListener("click", () => sendCommand(button.dataset.endpoint));
+});
+
+allCommandButtons.forEach((button) => {
+  button.addEventListener("click", () => sendAllCommand(button.dataset.allEndpoint));
 });
 
 // --- Mission planning --------------------------------------------------
@@ -346,7 +549,7 @@ clearWaypointsButton.addEventListener("click", clearWaypoints);
 
 uploadMissionButton.addEventListener("click", () => {
   if (waypoints.length === 0) {
-    showCommandResult("error", "/api/mission/upload: no waypoints planned");
+    showCommandResult("error", "mission/upload: no waypoints planned");
     return;
   }
 
@@ -354,7 +557,7 @@ uploadMissionButton.addEventListener("click", () => {
     altitude: parseFloat(altitudeInput.value),
     waypoints: waypoints.map((wp) => ({ lat: wp.lat, lon: wp.lon })),
   };
-  sendCommand("/api/mission/upload", body);
+  sendCommand(uploadMissionButton.dataset.endpoint, body);
 });
 
 // --- Geofence -----------------------------------------------------------
@@ -412,12 +615,12 @@ geofenceClearButton.addEventListener("click", clearGeofenceDrawing);
 
 geofenceUploadButton.addEventListener("click", () => {
   if (geofenceVertices.length < 3) {
-    showCommandResult("error", "/api/geofence/upload: need at least 3 points");
+    showCommandResult("error", "geofence/upload: need at least 3 points");
     return;
   }
 
   const body = { points: geofenceVertices.map((v) => ({ lat: v.lat, lon: v.lon })) };
-  sendCommand("/api/geofence/upload", body);
+  sendCommand(geofenceUploadButton.dataset.endpoint, body);
 });
 
 // --- Manual control -----------------------------------------------------
@@ -439,7 +642,6 @@ const MANUAL_MAX_YAW = 2.0; // rad/s, matches backend clamp
 
 const MANUAL_SEND_INTERVAL_MS = 100;
 
-let manualEnabled = false;
 const activeKeys = new Set();
 let joyMove = { x: 0, y: 0 }; // x: right, y: forward
 let joyVert = { x: 0, y: 0 }; // x: yaw, y: up
@@ -502,16 +704,18 @@ function updateVelocity() {
   velHorizontalEl.textContent = `${velocity.forward.toFixed(2)} / ${velocity.right.toFixed(2)}`;
   velVerticalEl.textContent = `${velocity.up.toFixed(2)} / ${velocity.yaw.toFixed(2)}`;
 
-  if (!manualEnabled || manualSendScheduled) {
+  if (!drones[selectedDrone].manualEnabled || manualSendScheduled) {
     return;
   }
 
   manualSendScheduled = true;
+  const targetDrone = selectedDrone;
   setTimeout(async () => {
     manualSendScheduled = false;
     const v = computeVelocity();
+    const endpoint = `/api/${targetDrone}/manual/command`;
     try {
-      const response = await fetch("/api/manual/command", {
+      const response = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -525,10 +729,10 @@ function updateVelocity() {
       });
       const data = await response.json();
       if (!data.ok) {
-        showCommandResult("error", `/api/manual/command: ${data.error}`);
+        showCommandResult("error", `${endpoint}: ${data.error}`);
       }
     } catch (err) {
-      showCommandResult("error", `/api/manual/command: request failed (${err.message})`);
+      showCommandResult("error", `${endpoint}: request failed (${err.message})`);
     }
   }, MANUAL_SEND_INTERVAL_MS);
 }
@@ -538,7 +742,7 @@ function isTypingTarget(target) {
 }
 
 window.addEventListener("keydown", (event) => {
-  if (!manualEnabled || isTypingTarget(event.target)) {
+  if (!drones[selectedDrone].manualEnabled || isTypingTarget(event.target)) {
     return;
   }
   const key = event.key.toLowerCase();
@@ -635,7 +839,9 @@ const resetVertStick = setupJoystick(
 );
 
 manualToggleButton.addEventListener("click", async () => {
-  const endpoint = manualEnabled ? "/api/manual/stop" : "/api/manual/start";
+  const targetDrone = selectedDrone;
+  const manualEnabled = drones[targetDrone].manualEnabled;
+  const endpoint = `/api/${targetDrone}/manual/${manualEnabled ? "stop" : "start"}`;
   manualToggleButton.disabled = true;
   showCommandResult("", "Sending...");
 
@@ -644,12 +850,14 @@ manualToggleButton.addEventListener("click", async () => {
     const data = await response.json();
 
     if (data.ok) {
-      manualEnabled = !manualEnabled;
-      manualToggleButton.textContent = `Manual: ${manualEnabled ? "ON" : "OFF"}`;
-      manualToggleButton.classList.toggle("active", manualEnabled);
+      drones[targetDrone].manualEnabled = !manualEnabled;
+      if (targetDrone === selectedDrone) {
+        manualToggleButton.textContent = `Manual: ${drones[targetDrone].manualEnabled ? "ON" : "OFF"}`;
+        manualToggleButton.classList.toggle("active", drones[targetDrone].manualEnabled);
+      }
       showCommandResult("ok", `${endpoint}: OK`);
 
-      if (!manualEnabled) {
+      if (!drones[targetDrone].manualEnabled) {
         activeKeys.clear();
         resetMoveStick();
         resetVertStick();
