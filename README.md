@@ -1,4 +1,8 @@
-# drone-gcs — Sprint 0
+<p align="center">
+  <img src="docs/logo.png" alt="Pharos logo" width="240">
+</p>
+
+# Pharos — Sprint 0
 
 A minimal Python script that connects to a PX4 SITL (Software In The Loop)
 instance via MAVSDK and prints live position telemetry. This is the
