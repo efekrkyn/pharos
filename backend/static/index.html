@@ -51,6 +51,23 @@
       </section>
 
       <section class="panel">
+        <h2>Charts</h2>
+        <div class="chart-block">
+          <span class="telemetry-label">Relative altitude (m)</span>
+          <canvas id="chart-altitude" class="chart-canvas"></canvas>
+        </div>
+        <div class="chart-block">
+          <span class="telemetry-label">Ground speed (m/s)</span>
+          <canvas id="chart-speed" class="chart-canvas"></canvas>
+        </div>
+        <div class="chart-block">
+          <span class="telemetry-label">Battery (%)</span>
+          <canvas id="chart-battery" class="chart-canvas"></canvas>
+          <div id="battery-chart-status" class="hint chart-status"></div>
+        </div>
+      </section>
+
+      <section class="panel">
         <h2>Flight Commands</h2>
         <div class="button-row">
           <button id="btn-arm" class="btn btn-primary" data-endpoint="/api/arm">Arm</button>
@@ -144,6 +161,7 @@
   </div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>

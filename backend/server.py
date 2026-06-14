@@ -75,6 +75,16 @@ mission_state = {"mission_current": 0, "mission_total": 0}
 # intent into the drone's forward/right body frame. None until known.
 heading_state = {"heading_deg": None}
 
+# Latest horizontal ground speed (m/s), derived from velocity_ned() and
+# merged into every telemetry broadcast the same way as heading_state. None
+# until known.
+velocity_state = {"ground_speed_m_s": None}
+
+# Latest battery state, merged into every telemetry broadcast the same way
+# as heading_state. None until known (and may stay NaN/None on SITL targets
+# that don't simulate a battery).
+battery_state = {"battery_percent": None, "battery_voltage_v": None}
+
 
 async def telemetry_task() -> None:
     """Maintain a single drone connection and broadcast position updates.
@@ -104,6 +114,8 @@ async def telemetry_task() -> None:
                         "rel_alt": position.relative_altitude_m,
                         **mission_state,
                         **heading_state,
+                        **velocity_state,
+                        **battery_state,
                     }
                 )
         except Exception:
@@ -112,7 +124,11 @@ async def telemetry_task() -> None:
             await _stop_manual_task()
             mission_state.update(mission_current=0, mission_total=0)
             heading_state.update(heading_deg=None)
-            await hub.broadcast({**WAITING_STATE, **mission_state, **heading_state})
+            velocity_state.update(ground_speed_m_s=None)
+            battery_state.update(battery_percent=None, battery_voltage_v=None)
+            await hub.broadcast(
+                {**WAITING_STATE, **mission_state, **heading_state, **velocity_state, **battery_state}
+            )
 
 
 async def mission_progress_task() -> None:
@@ -141,7 +157,9 @@ async def mission_progress_task() -> None:
                 except asyncio.TimeoutError:
                     continue
                 mission_state.update(mission_current=progress.current, mission_total=progress.total)
-                await hub.broadcast({**hub.latest, **mission_state, **heading_state})
+                await hub.broadcast(
+                    {**hub.latest, **mission_state, **heading_state, **velocity_state, **battery_state}
+                )
         except StopAsyncIteration:
             await asyncio.sleep(1)
         except Exception:
@@ -171,11 +189,82 @@ async def heading_task() -> None:
                 except asyncio.TimeoutError:
                     continue
                 heading_state.update(heading_deg=heading.heading_deg)
-                await hub.broadcast({**hub.latest, **mission_state, **heading_state})
+                await hub.broadcast(
+                    {**hub.latest, **mission_state, **heading_state, **velocity_state, **battery_state}
+                )
         except StopAsyncIteration:
             await asyncio.sleep(1)
         except Exception:
             logger.exception("Heading stream ended, will retry")
+            await asyncio.sleep(1)
+
+
+async def velocity_task() -> None:
+    """Track telemetry.velocity_ned() and broadcast horizontal ground speed.
+
+    Merges into the same telemetry messages sent by telemetry_task() (via
+    velocity_state), same reconnect-tolerant pattern as heading_task().
+    """
+    while True:
+        current_drone = drone
+        if current_drone is None:
+            await asyncio.sleep(1)
+            continue
+
+        try:
+            stream = current_drone.telemetry.velocity_ned()
+            while True:
+                if drone is not current_drone:
+                    break
+                try:
+                    velocity = await asyncio.wait_for(stream.__anext__(), timeout=2.0)
+                except asyncio.TimeoutError:
+                    continue
+                ground_speed = math.hypot(velocity.north_m_s, velocity.east_m_s)
+                velocity_state.update(ground_speed_m_s=ground_speed)
+                await hub.broadcast(
+                    {**hub.latest, **mission_state, **heading_state, **velocity_state, **battery_state}
+                )
+        except StopAsyncIteration:
+            await asyncio.sleep(1)
+        except Exception:
+            logger.exception("Velocity stream ended, will retry")
+            await asyncio.sleep(1)
+
+
+async def battery_task() -> None:
+    """Track telemetry.battery() and broadcast remaining percent + voltage.
+
+    Merges into the same telemetry messages sent by telemetry_task() (via
+    battery_state), same reconnect-tolerant pattern as heading_task(). Some
+    SITL targets report NaN for battery fields; NaN is passed through as-is
+    and the frontend treats it as "no data".
+    """
+    while True:
+        current_drone = drone
+        if current_drone is None:
+            await asyncio.sleep(1)
+            continue
+
+        try:
+            stream = current_drone.telemetry.battery()
+            while True:
+                if drone is not current_drone:
+                    break
+                try:
+                    battery = await asyncio.wait_for(stream.__anext__(), timeout=2.0)
+                except asyncio.TimeoutError:
+                    continue
+                percent = None if math.isnan(battery.remaining_percent) else battery.remaining_percent
+                voltage = None if math.isnan(battery.voltage_v) else battery.voltage_v
+                battery_state.update(battery_percent=percent, battery_voltage_v=voltage)
+                await hub.broadcast(
+                    {**hub.latest, **mission_state, **heading_state, **velocity_state, **battery_state}
+                )
+        except StopAsyncIteration:
+            await asyncio.sleep(1)
+        except Exception:
+            logger.exception("Battery stream ended, will retry")
             await asyncio.sleep(1)
 
 
@@ -186,6 +275,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         asyncio.create_task(telemetry_task()),
         asyncio.create_task(mission_progress_task()),
         asyncio.create_task(heading_task()),
+        asyncio.create_task(velocity_task()),
+        asyncio.create_task(battery_task()),
     ]
     try:
         yield

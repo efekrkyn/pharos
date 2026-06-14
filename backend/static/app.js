@@ -67,6 +67,89 @@ function updateMap(lat, lon) {
 // forward/right body frame. Stays at 0 (north) until telemetry provides it.
 let currentHeadingDeg = 0;
 
+// --- Telemetry charts ----------------------------------------------------
+
+// Rolling window: how many telemetry samples each chart keeps before old
+// points scroll off the left edge.
+const MAX_CHART_POINTS = 120;
+
+const CHART_COLOR = "#2dd4bf";
+const CHART_GRID_COLOR = "rgba(230, 244, 241, 0.06)";
+const CHART_TEXT_COLOR = "#7a8c8a";
+
+function createTelemetryChart(canvasId, label) {
+  const ctx = document.getElementById(canvasId);
+  return new Chart(ctx, {
+    type: "line",
+    data: {
+      labels: [],
+      datasets: [
+        {
+          label,
+          data: [],
+          borderColor: CHART_COLOR,
+          backgroundColor: "transparent",
+          borderWidth: 1.5,
+          pointRadius: 0,
+          tension: 0.25,
+          spanGaps: true,
+        },
+      ],
+    },
+    options: {
+      animation: false,
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { intersect: false },
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { display: false },
+        y: {
+          grid: { color: CHART_GRID_COLOR },
+          ticks: { color: CHART_TEXT_COLOR, font: { family: "JetBrains Mono", size: 10 } },
+        },
+      },
+    },
+  });
+}
+
+const altitudeChart = createTelemetryChart("chart-altitude", "Rel. altitude (m)");
+const speedChart = createTelemetryChart("chart-speed", "Ground speed (m/s)");
+const batteryChart = createTelemetryChart("chart-battery", "Battery (%)");
+const batteryChartStatusEl = document.getElementById("battery-chart-status");
+
+let batteryEverSeen = false;
+
+function pushChartPoint(chart, value) {
+  const data = chart.data.datasets[0].data;
+  chart.data.labels.push("");
+  data.push(value);
+  if (data.length > MAX_CHART_POINTS) {
+    chart.data.labels.shift();
+    data.shift();
+  }
+  chart.update();
+}
+
+function updateCharts(data) {
+  const connected = data.status === "connected";
+
+  pushChartPoint(altitudeChart, connected ? data.rel_alt ?? null : null);
+  pushChartPoint(speedChart, connected ? data.ground_speed_m_s ?? null : null);
+
+  const batteryValue = connected ? data.battery_percent ?? null : null;
+  if (batteryValue !== null) {
+    batteryEverSeen = true;
+  }
+  pushChartPoint(batteryChart, batteryValue);
+
+  if (!batteryEverSeen) {
+    batteryChartStatusEl.textContent = "No battery data reported by this vehicle.";
+  } else {
+    batteryChartStatusEl.textContent = "";
+  }
+}
+
 function renderTelemetry(data) {
   latEl.textContent = formatNumber(data.lat, 7);
   lonEl.textContent = formatNumber(data.lon, 7);
@@ -87,6 +170,7 @@ function renderTelemetry(data) {
   }
 
   renderMissionProgress(data);
+  updateCharts(data);
 }
 
 const missionProgressEl = document.getElementById("mission-progress");
