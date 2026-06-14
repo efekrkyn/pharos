@@ -35,8 +35,12 @@ MISSION_ACCEPTANCE_RADIUS_M = 2.0
 # PX4's GF_ACTION parameter: what the vehicle does on a geofence breach.
 # 0=None, 1=Warning, 2=Hold, 3=Return, 4=Terminate, 5=Land. We set this to
 # Hold whenever a geofence is uploaded so breaches are actually enforced
-# and observable (the vehicle stops and hovers at the fence).
+# and observable (the vehicle stops and hovers at the fence), and back to
+# None when the geofence is cleared so a stale Hold can't keep forcing the
+# vehicle out of OFFBOARD (e.g. during manual control) once there's no
+# fence left to enforce.
 GF_ACTION_HOLD = 2
+GF_ACTION_NONE = 0
 
 # Manual control: how fast we re-send velocity setpoints, and the speed
 # limits applied to incoming /api/manual/command values.
@@ -378,8 +382,13 @@ async def upload_geofence(request: GeofenceUploadRequest) -> JSONResponse:
 
 @app.post("/api/geofence/clear")
 async def clear_geofence() -> JSONResponse:
-    """Remove all geofences stored on the vehicle."""
-    return await _run_command(lambda: drone.geofence.clear_geofence())
+    """Remove all geofences stored on the vehicle and stop enforcing GF_ACTION."""
+
+    async def _clear():
+        await drone.geofence.clear_geofence()
+        await drone.param.set_param_int("GF_ACTION", GF_ACTION_NONE)
+
+    return await _run_command(_clear)
 
 
 def _clamp(value: float, limit: float) -> float:
