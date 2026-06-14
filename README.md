@@ -1,179 +1,132 @@
 <p align="center">
-  <img src="docs/logo.png" alt="Pharos logo" width="240">
+  <img src="docs/logo.png" alt="Pharos logo" width="220">
 </p>
 
-# Pharos — Sprint 0
+<h1 align="center">Pharos</h1>
 
-A minimal Python script that connects to a PX4 SITL (Software In The Loop)
-instance via MAVSDK and prints live position telemetry. This is the
-foundation for a larger web-based Ground Control Station built in later
-sprints.
+<p align="center">
+  A web-based ground control station for PX4 drones — live telemetry, manual
+  flight, mission planning, and geofencing from a browser.
+</p>
 
-## Repo layout
+<p align="center">
+  <img src="docs/screenshot-dashboard.png" alt="Pharos dashboard screenshot" width="100%">
+</p>
 
-```
-drone-gcs/
-├── README.md
-├── requirements.txt
-├── backend/
-│   ├── main.py
-│   └── drone/
-│       ├── __init__.py
-│       └── connection.py
-└── .gitignore
-```
-
-- `backend/drone/connection.py` — connects to the drone over MAVLink/UDP and
-  waits until MAVSDK reports the system as connected.
-- `backend/main.py` — connects, subscribes to position telemetry, and prints
-  latitude/longitude/altitude as it updates.
+<p align="center"><em>Live dashboard: dark map with a tracked drone position, telemetry readout, flight commands, manual control joysticks, mission planning, and geofencing — all in one view.</em></p>
 
 ---
 
-## 1. System setup (inside WSL Ubuntu)
+## Features
 
-All commands below run **inside your WSL Ubuntu shell**, not Windows/PowerShell.
+**Live telemetry**
+- Real-time position, altitude, and connection status streamed over a WebSocket
+- Dark-themed live map (Leaflet) with a following drone marker and flight trail
 
-### 1.1 Base packages
+**Flight commands**
+- Arm, Takeoff, Land, and Return to Launch from the dashboard
 
-```bash
-sudo apt update
-sudo apt install -y git python3-venv python3-pip build-essential
+**Manual flight control**
+- On-screen joysticks (move + vertical/yaw) and keyboard control (W/A/S/D, Q/E, R/F)
+- Implemented via MAVSDK offboard velocity setpoints, streamed continuously to PX4
+- Move joystick is map-relative (north/east), automatically rotated into the
+  drone's body frame using its live compass heading
+
+**Autonomous mission planning**
+- Click waypoints directly on the map to build a route
+- Upload and run the mission on PX4, with live "Waypoint X / Y" progress
+  reported back to the dashboard
+
+**Geofencing**
+- Draw an inclusion-boundary polygon on the map
+- Upload it to PX4 as an enforced geofence (breach action: Hold)
+- Clear the fence from the vehicle at any time
+
+---
+
+## Architecture
+
+```
+PX4 SITL (firmware)
+      │  MAVLink / UDP (14540)
+      ▼
+MAVSDK-Python  ──  shared connection
+      │
+      ▼
+FastAPI backend (server.py)
+      │  WebSocket (telemetry/state)  +  REST (commands)
+      ▼
+Browser frontend (Leaflet + vanilla JS)
 ```
 
-### 1.2 Python virtual environment for this project
+The backend maintains a single MAVSDK connection to PX4 and three background
+tasks (telemetry, mission progress, heading), broadcasting merged state to all
+connected browser clients over a WebSocket. Flight commands, mission uploads,
+geofence uploads, and manual control setpoints are sent as REST calls that
+translate directly into MAVSDK action/mission/offboard/geofence calls.
+
+---
+
+## Tech stack
+
+- **Backend:** Python, [FastAPI](https://fastapi.tiangolo.com/), [MAVSDK-Python](https://mavsdk.mavlink.io/)
+- **Realtime transport:** WebSocket (telemetry) + REST (commands)
+- **Frontend:** Vanilla JavaScript, [Leaflet](https://leafletjs.com/) (dark CARTO tiles)
+- **Simulation:** [PX4 SITL](https://docs.px4.io/main/en/simulation/) (SIH backend)
+
+---
+
+## Getting started
+
+Targets **PX4 SITL** (simulation) — no real hardware required. Developed and
+tested on **WSL2 / Ubuntu**.
+
+### 1. Backend
 
 ```bash
-cd ~/drone-gcs
+cd ~/pharos
 python3 -m venv .venv
 source .venv/bin/activate
-pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-You should now have `mavsdk` installed in `.venv`. Verify:
+### 2. PX4 SITL
 
-```bash
-python -c "import mavsdk; print(mavsdk.__version__)"
-```
-
-> **Note on Python 3.14**: MAVSDK-Python 3.15.x ships a pure-Python wheel
-> (`mavsdk-3.15.3-py3-none-...`) plus a precompiled `mavsdk_server` backend
-> binary. It installs and imports cleanly on Python 3.14 — no fallback to an
-> older Python is needed for this project.
-
----
-
-## 2. Building and running PX4 SITL
-
-PX4 SITL is a separate project (not part of this repo). Clone and build it
-**outside** `~/drone-gcs`, e.g. directly in your home directory.
-
-These steps follow the official PX4 guide — if anything below drifts from
-what you see on screen, defer to the official docs:
-https://docs.px4.io/main/en/dev_setup/dev_env_linux_ubuntu.html and
-https://docs.px4.io/main/en/simulation/
-
-### 2.1 Clone PX4
-
-```bash
-cd ~
-git clone https://github.com/PX4/PX4-Autopilot.git --recursive
-cd PX4-Autopilot
-```
-
-### 2.2 Install PX4's build toolchain
-
-PX4 provides a script that installs everything needed for SITL builds
-(simulation tools, gcc, Python build deps, etc.). Run it once:
-
-```bash
-bash ./Tools/setup/ubuntu.sh
-```
-
-This may take a while and can prompt for your password (it uses `sudo`).
-**After it finishes, close and reopen your WSL terminal** (or run
-`exec bash`) so updated group memberships and environment variables take
-effect.
-
-### 2.3 Build and launch SITL with a multicopter target
-
-From `~/PX4-Autopilot`, build and run the standard quadrotor SITL target
-(uses the jMAVSim simulator, which is lighter than Gazebo and sufficient for
-telemetry testing):
-
-```bash
-make px4_sitl jmavsim
-```
-
-The first build takes several minutes. When it finishes, PX4 SITL starts
-automatically and you'll see the `pxh>` PX4 shell prompt along with a
-jMAVSim simulator window (if you have an X server set up on Windows; if not,
-the simulation still runs headless and MAVLink is still available — the GUI
-window just won't display).
-
-**Leave this terminal running.** This is "Terminal 1".
-
----
-
-## 3. The two-terminal workflow
-
-### Terminal 1 — PX4 SITL
+Clone and build [PX4-Autopilot](https://github.com/PX4/PX4-Autopilot) following
+the [official setup guide](https://docs.px4.io/main/en/dev_setup/dev_env_linux_ubuntu.html).
+Then run the headless SIH simulator (no Gazebo/Java required), set to start at
+TED University, Ankara — matching the dashboard's default map view:
 
 ```bash
 cd ~/PX4-Autopilot
-make px4_sitl jmavsim
+PX4_HOME_LAT=39.9228214 PX4_HOME_LON=32.8618589 PX4_HOME_ALT=850 \
+  make px4_sitl sihsim_quadx
 ```
 
-Wait until you see the `pxh>` prompt. By default, PX4 SITL sends MAVLink
-telemetry over UDP to `localhost:14540` — this is the port our script
-listens on (`udp://:14540`).
+PX4 SITL streams MAVLink over UDP to `localhost:14540`, which the backend
+connects to automatically.
 
-### Terminal 2 — this project's script
+### 3. Run Pharos
+
+With PX4 SITL running, in a second terminal:
 
 ```bash
-cd ~/drone-gcs
-source .venv/bin/activate
-python backend/main.py
+cd ~/pharos/backend
+source ../.venv/bin/activate
+uvicorn server:app --reload --port 8000
 ```
 
-### What you should see
-
-In Terminal 2, after `connection.py` logs that a system was discovered, you
-should see continuously updating lines like:
-
-```
-lat=47.3977415 lon=8.5455932 abs_alt=488.12m rel_alt=0.01m
-```
-
-Press `Ctrl+C` in Terminal 2 to stop the script cleanly.
+Open **http://localhost:8000** in your browser. Once PX4 reports a connection,
+the dashboard will go live: telemetry starts updating, and flight/mission/
+geofence/manual controls become available.
 
 ---
 
-## 4. Verifying it works
+## Status / roadmap
 
-1. Start PX4 SITL in Terminal 1 and wait for the `pxh>` prompt.
-2. In Terminal 2, run `python backend/main.py`.
-3. Confirm:
-   - The log line `Connecting to drone at udp://:14540 ...` appears.
-   - Within a few seconds, `Drone connected (system discovered)` appears.
-   - Latitude/longitude/altitude values start printing and update over time.
-4. If PX4 SITL is **not** running, the script should log a clear error after
-   ~10 seconds (the connection timeout) and exit instead of hanging forever.
+Pharos is built incrementally as a learning and portfolio project. Possible
+next steps:
 
-If you don't see a connection within the timeout while PX4 SITL is running,
-check:
-
-- PX4 SITL's console output for the MAVLink UDP port it's broadcasting to
-  (it should include `14540`).
-- That nothing else is bound to UDP port 14540 (`ss -ulnp | grep 14540`).
-- That you're running both terminals inside the same WSL instance (not one
-  in WSL and one in Windows).
-
----
-
-## Next: Sprint 1
-
-Sprint 1 will wrap this connection logic in a FastAPI app with a WebSocket
-endpoint, so telemetry can be streamed to a browser-based frontend instead of
-the console.
+- Flight-log analysis and replay
+- Multi-drone / swarm support
+- Telemetry charts (altitude, speed, battery over time)
