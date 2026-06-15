@@ -884,17 +884,23 @@ const aiSendButton = document.getElementById("btn-ai-send");
 const aiPlanActionsEl = document.getElementById("ai-plan-actions");
 const aiApproveButton = document.getElementById("btn-ai-approve");
 const aiDiscardButton = document.getElementById("btn-ai-discard");
+const aiTargetSelectEl = document.getElementById("ai-target-select");
 
-// The pending plan awaiting approval, or null. Targets whichever drone was
-// selected when the plan was generated.
+// The pending plan awaiting approval, or null. Either a single-drone plan
+// ({drone_id, altitude, waypoints}) or a swarm plan ({assignments: [...]}).
 let currentAiPlan = null;
 
 const aiProposedRoute = L.polyline([], { color: "#a78bfa", weight: 2, dashArray: "2 6" }).addTo(map);
 let aiProposedMarkers = [];
 
-function aiWaypointIcon(number) {
+// Per-drone preview routes/markers for swarm plans, keyed by drone_id.
+let aiSwarmRoutes = [];
+let aiSwarmMarkers = [];
+
+function aiWaypointIcon(number, droneId) {
+  const className = droneId ? `ai-waypoint-icon ai-waypoint-icon-${droneId}` : "ai-waypoint-icon";
   return L.divIcon({
-    className: "ai-waypoint-icon",
+    className,
     html: String(number),
     iconSize: [24, 24],
   });
@@ -909,8 +915,8 @@ function appendChatMessage(role, text) {
   return div;
 }
 
-function showAiPlan(plan) {
-  currentAiPlan = { drone_id: selectedDrone, altitude: plan.altitude, waypoints: plan.waypoints };
+function showAiPlan(plan, droneId) {
+  currentAiPlan = { drone_id: droneId, altitude: plan.altitude, waypoints: plan.waypoints };
 
   const waypointLines = plan.waypoints
     .map((wp, i) => `  #${i + 1}: ${wp.lat.toFixed(6)}, ${wp.lon.toFixed(6)}`)
@@ -926,6 +932,37 @@ function showAiPlan(plan) {
     L.marker([wp.lat, wp.lon], { icon: aiWaypointIcon(i + 1) }).addTo(map)
   );
 
+  aiApproveButton.textContent = "Approve & fly";
+  aiPlanActionsEl.style.display = "flex";
+}
+
+function showAiSwarmPlan(plan) {
+  currentAiPlan = { assignments: plan.assignments };
+
+  let text = plan.summary;
+  for (const assignment of plan.assignments) {
+    const label = DRONE_LABELS[assignment.drone_id] || assignment.drone_id;
+    const waypointLines = assignment.waypoints
+      .map((wp, i) => `    #${i + 1}: ${wp.lat.toFixed(6)}, ${wp.lon.toFixed(6)}`)
+      .join("\n");
+    text += `\n\n${label}: ${assignment.altitude}m, ${assignment.waypoints.length} waypoints:\n${waypointLines}`;
+  }
+  appendChatMessage("assistant", text);
+
+  aiSwarmRoutes = plan.assignments.map((assignment) =>
+    L.polyline(assignment.waypoints.map((wp) => [wp.lat, wp.lon]), {
+      color: TRAIL_COLORS[assignment.drone_id] || "#a78bfa",
+      weight: 2,
+      dashArray: "2 6",
+    }).addTo(map)
+  );
+  aiSwarmMarkers = plan.assignments.flatMap((assignment) =>
+    assignment.waypoints.map((wp, i) =>
+      L.marker([wp.lat, wp.lon], { icon: aiWaypointIcon(i + 1, assignment.drone_id) }).addTo(map)
+    )
+  );
+
+  aiApproveButton.textContent = "Approve & fly all";
   aiPlanActionsEl.style.display = "flex";
 }
 
@@ -934,6 +971,10 @@ function clearAiPlan() {
   aiProposedRoute.setLatLngs([]);
   aiProposedMarkers.forEach((marker) => map.removeLayer(marker));
   aiProposedMarkers = [];
+  aiSwarmRoutes.forEach((route) => map.removeLayer(route));
+  aiSwarmRoutes = [];
+  aiSwarmMarkers.forEach((marker) => map.removeLayer(marker));
+  aiSwarmMarkers = [];
   aiPlanActionsEl.style.display = "none";
 }
 
@@ -943,25 +984,42 @@ async function sendAiPrompt() {
     return;
   }
 
+  const target = aiTargetSelectEl.value;
+
   appendChatMessage("user", prompt);
   aiPromptInput.value = "";
   clearAiPlan();
 
   aiSendButton.disabled = true;
   aiPromptInput.disabled = true;
-  const statusMessage = appendChatMessage("status", `Asking the planner for ${DRONE_LABELS[selectedDrone]}...`);
+
+  let requestBody;
+  let statusText;
+  if (target === "all") {
+    requestBody = { prompt, target: "all" };
+    statusText = "Asking the planner to distribute this across the swarm...";
+  } else {
+    const droneId = target === "selected" ? selectedDrone : target;
+    requestBody = { prompt, drone_id: droneId, target: "single" };
+    statusText = `Asking the planner for ${DRONE_LABELS[droneId]}...`;
+  }
+  const statusMessage = appendChatMessage("status", statusText);
 
   try {
     const response = await fetch("/api/plan", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prompt, drone_id: selectedDrone }),
+      body: JSON.stringify(requestBody),
     });
     const data = await response.json();
     statusMessage.remove();
 
     if (data.ok) {
-      showAiPlan(data.plan);
+      if (target === "all") {
+        showAiSwarmPlan(data.plan);
+      } else {
+        showAiPlan(data.plan, requestBody.drone_id);
+      }
     } else {
       appendChatMessage("error", data.error || "Plan request failed");
     }
@@ -999,7 +1057,17 @@ aiApproveButton.addEventListener("click", async () => {
     });
     const data = await response.json();
 
-    if (data.ok) {
+    if (plan.assignments) {
+      for (const assignment of plan.assignments) {
+        const label = DRONE_LABELS[assignment.drone_id] || assignment.drone_id;
+        const result = (data.results || {})[assignment.drone_id];
+        if (result && result.ok) {
+          appendChatMessage("status", `${label}: mission uploaded and started.`);
+        } else {
+          appendChatMessage("error", `${label}: ${(result && result.error) || "Execution failed"}`);
+        }
+      }
+    } else if (data.ok) {
       appendChatMessage("status", `${DRONE_LABELS[plan.drone_id]}: mission uploaded and started.`);
     } else {
       appendChatMessage("error", data.error || "Execution failed");

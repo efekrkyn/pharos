@@ -764,7 +764,8 @@ async def manual_stop(drone_id: str) -> JSONResponse:
 
 class PlanRequest(BaseModel):
     prompt: str
-    drone_id: str
+    drone_id: str | None = None
+    target: str = "single"  # "single" | "all"
 
 
 @app.post("/api/plan")
@@ -773,7 +774,35 @@ async def plan_mission(request: PlanRequest) -> JSONResponse:
 
     Does NOT execute anything — the returned plan must be sent back to
     /api/plan/execute (after user approval) to actually fly it.
+
+    target="single" plans for the one drone given by drone_id (the existing
+    behavior). target="all" asks the LLM to divide the task across every
+    connected drone with a known position, returning a per-drone assignment
+    plan instead.
     """
+    if request.target == "all":
+        drones = []
+        for drone_id, state in DRONES.items():
+            latest = hub.latest.get(drone_id)
+            if latest and latest.get("lat") is not None and latest.get("lon") is not None:
+                drones.append({"drone_id": drone_id, "label": state.label, "lat": latest["lat"], "lon": latest["lon"]})
+
+        if not drones:
+            return JSONResponse(
+                {"ok": False, "error": "No connected drones with a known position to plan for"},
+                status_code=503,
+            )
+
+        try:
+            plan = await llm_planner.generate_swarm_plan(request.prompt, drones)
+        except llm_planner.PlanError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+
+        return JSONResponse({"ok": True, "plan": plan})
+
+    if request.drone_id is None:
+        return JSONResponse({"ok": False, "error": "drone_id is required for target='single'"}, status_code=400)
+
     state = _get_drone(request.drone_id)
     if isinstance(state, JSONResponse):
         return state
@@ -793,10 +822,17 @@ async def plan_mission(request: PlanRequest) -> JSONResponse:
     return JSONResponse({"ok": True, "plan": plan})
 
 
-class PlanExecuteRequest(BaseModel):
+class PlanAssignment(BaseModel):
     drone_id: str
     altitude: float
     waypoints: list[Waypoint]
+
+
+class PlanExecuteRequest(BaseModel):
+    drone_id: str | None = None
+    altitude: float | None = None
+    waypoints: list[Waypoint] | None = None
+    assignments: list[PlanAssignment] | None = None
 
 
 async def _fly_plan_action(drone: System, altitude: float) -> None:
@@ -821,22 +857,52 @@ async def _fly_plan_action(drone: System, altitude: float) -> None:
     logger.info("mission.start_mission() accepted")
 
 
-@app.post("/api/plan/execute")
-async def execute_plan(request: PlanExecuteRequest) -> JSONResponse:
-    """Upload an approved plan as a mission, then arm/takeoff/start it.
+async def _execute_assignment(drone_id: str, altitude: float, waypoints: list[Waypoint]) -> tuple[dict, int]:
+    """Upload one drone's plan and arm/takeoff/start it, returning (result, status_code).
 
     Reuses upload_mission() for the upload step; see _fly_plan_action() for
     why arm+takeoff+start (not just start_mission()) is needed to actually
     get the vehicle airborne.
     """
-    state = _get_drone(request.drone_id)
+    state = _get_drone(drone_id)
     if isinstance(state, JSONResponse):
-        return state
+        return json.loads(state.body), state.status_code
 
-    upload_result = await upload_mission(
-        request.drone_id, MissionUploadRequest(altitude=request.altitude, waypoints=request.waypoints)
-    )
-    if json.loads(upload_result.body).get("ok") is not True:
-        return upload_result
+    upload_result = await upload_mission(drone_id, MissionUploadRequest(altitude=altitude, waypoints=waypoints))
+    upload_data = json.loads(upload_result.body)
+    if upload_data.get("ok") is not True:
+        return upload_data, upload_result.status_code
 
-    return await _run_command(state, lambda d: _fly_plan_action(d, request.altitude))
+    fly_result = await _run_command(state, lambda d: _fly_plan_action(d, altitude))
+    return json.loads(fly_result.body), fly_result.status_code
+
+
+@app.post("/api/plan/execute")
+async def execute_plan(request: PlanExecuteRequest) -> JSONResponse:
+    """Upload and fly an approved plan: either one drone's plan, or a per-drone swarm assignment set.
+
+    For a single plan (drone_id/altitude/waypoints), behaves as before. For
+    a swarm plan (assignments), each drone's plan is uploaded and launched
+    concurrently so the swarm takes off together; results are reported per
+    drone.
+    """
+    if request.assignments is not None:
+        results = await asyncio.gather(
+            *(
+                _execute_assignment(assignment.drone_id, assignment.altitude, assignment.waypoints)
+                for assignment in request.assignments
+            )
+        )
+        results_by_drone = {assignment.drone_id: result for assignment, result in zip(request.assignments, results)}
+        overall_ok = any(result.get("ok") for result in results_by_drone.values())
+        return JSONResponse({"ok": overall_ok, "results": results_by_drone})
+
+    if request.drone_id is None or request.altitude is None or request.waypoints is None:
+        return JSONResponse(
+            {"ok": False, "error": "drone_id, altitude, and waypoints are required when assignments is not given"},
+            status_code=400,
+        )
+
+    result = await _execute_assignment(request.drone_id, request.altitude, request.waypoints)
+    status_code = 200 if result.get("ok") else 400
+    return JSONResponse(result, status_code=status_code)
