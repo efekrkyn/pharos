@@ -857,24 +857,26 @@ async def _fly_plan_action(drone: System, altitude: float) -> None:
     logger.info("mission.start_mission() accepted")
 
 
-async def _execute_assignment(drone_id: str, altitude: float, waypoints: list[Waypoint]) -> tuple[dict, int]:
-    """Upload one drone's plan and arm/takeoff/start it, returning (result, status_code).
+async def _execute_assignment(drone_id: str, altitude: float, waypoints: list[Waypoint]) -> dict:
+    """Upload one drone's plan and arm/takeoff/start it, returning a result dict with "ok".
 
     Reuses upload_mission() for the upload step; see _fly_plan_action() for
     why arm+takeoff+start (not just start_mission()) is needed to actually
-    get the vehicle airborne.
+    get the vehicle airborne. Never raises — failures (unknown drone, upload
+    rejected, arm denied, etc.) are reported via {"ok": False, "error": ...}
+    so a per-drone failure can't take down the whole /api/plan/execute request.
     """
     state = _get_drone(drone_id)
     if isinstance(state, JSONResponse):
-        return json.loads(state.body), state.status_code
+        return json.loads(state.body)
 
     upload_result = await upload_mission(drone_id, MissionUploadRequest(altitude=altitude, waypoints=waypoints))
     upload_data = json.loads(upload_result.body)
     if upload_data.get("ok") is not True:
-        return upload_data, upload_result.status_code
+        return upload_data
 
     fly_result = await _run_command(state, lambda d: _fly_plan_action(d, altitude))
-    return json.loads(fly_result.body), fly_result.status_code
+    return json.loads(fly_result.body)
 
 
 @app.post("/api/plan/execute")
@@ -884,7 +886,8 @@ async def execute_plan(request: PlanExecuteRequest) -> JSONResponse:
     For a single plan (drone_id/altitude/waypoints), behaves as before. For
     a swarm plan (assignments), each drone's plan is uploaded and launched
     concurrently so the swarm takes off together; results are reported per
-    drone.
+    drone in "results", and the top-level "ok" is true only if every
+    assignment succeeded.
     """
     if request.assignments is not None:
         results = await asyncio.gather(
@@ -894,7 +897,7 @@ async def execute_plan(request: PlanExecuteRequest) -> JSONResponse:
             )
         )
         results_by_drone = {assignment.drone_id: result for assignment, result in zip(request.assignments, results)}
-        overall_ok = any(result.get("ok") for result in results_by_drone.values())
+        overall_ok = all(result.get("ok") for result in results_by_drone.values())
         return JSONResponse({"ok": overall_ok, "results": results_by_drone})
 
     if request.drone_id is None or request.altitude is None or request.waypoints is None:
