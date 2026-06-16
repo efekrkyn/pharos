@@ -762,6 +762,69 @@ async def manual_stop(drone_id: str) -> JSONResponse:
     return JSONResponse({"ok": True})
 
 
+# Mirrors llm_planner.SWARM_MIN/MAX_ALTITUDE_M — kept separate so server-side
+# validation doesn't depend on planner internals.
+SWARM_MIN_ALTITUDE_M = 5.0
+SWARM_MAX_ALTITUDE_M = 120.0
+
+
+def _haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Great-circle distance between two lat/lon points, in meters."""
+    earth_radius_m = 6371000.0
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlambda = math.radians(lon2 - lon1)
+    a = math.sin(dphi / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dlambda / 2) ** 2
+    return 2 * earth_radius_m * math.asin(math.sqrt(a))
+
+
+def _centroid(waypoints: list["Waypoint"]) -> tuple[float, float]:
+    return (
+        sum(wp.lat for wp in waypoints) / len(waypoints),
+        sum(wp.lon for wp in waypoints) / len(waypoints),
+    )
+
+
+def validate_swarm_assignments(assignments: list["PlanAssignment"]) -> str | None:
+    """Sanity-check a swarm plan's per-drone assignments before showing the preview.
+
+    Returns an error message if something looks wrong (empty/invalid waypoints,
+    out-of-range altitude, or overlapping sectors), or None if the plan looks fine.
+    """
+    for assignment in assignments:
+        if not assignment.waypoints:
+            return f"Drone '{assignment.drone_id}' has no waypoints"
+        if not (SWARM_MIN_ALTITUDE_M <= assignment.altitude <= SWARM_MAX_ALTITUDE_M):
+            return (
+                f"Drone '{assignment.drone_id}' altitude {assignment.altitude}m is outside "
+                f"the allowed range ({SWARM_MIN_ALTITUDE_M}-{SWARM_MAX_ALTITUDE_M}m)"
+            )
+
+    if len(assignments) < 2:
+        return None
+
+    all_lats = [wp.lat for a in assignments for wp in a.waypoints]
+    all_lons = [wp.lon for a in assignments for wp in a.waypoints]
+    lat_span_m = _haversine_m(min(all_lats), all_lons[0], max(all_lats), all_lons[0])
+    lon_span_m = _haversine_m(all_lats[0], min(all_lons), all_lats[0], max(all_lons))
+    overall_span_m = max(lat_span_m, lon_span_m, 1.0)
+    min_separation_m = 0.5 * (overall_span_m / len(assignments))
+
+    centroids = [(a.drone_id, _centroid(a.waypoints)) for a in assignments]
+    for i in range(len(centroids)):
+        for j in range(i + 1, len(centroids)):
+            id_a, (lat_a, lon_a) = centroids[i]
+            id_b, (lat_b, lon_b) = centroids[j]
+            dist = _haversine_m(lat_a, lon_a, lat_b, lon_b)
+            if dist < min_separation_m:
+                return (
+                    f"Sectors for '{id_a}' and '{id_b}' appear to overlap "
+                    f"(centroid separation {dist:.1f}m < {min_separation_m:.1f}m)"
+                )
+
+    return None
+
+
 class PlanRequest(BaseModel):
     prompt: str
     drone_id: str | None = None
@@ -797,6 +860,19 @@ async def plan_mission(request: PlanRequest) -> JSONResponse:
             plan = await llm_planner.generate_swarm_plan(request.prompt, drones)
         except llm_planner.PlanError as exc:
             return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+        except Exception as exc:
+            logger.exception("Unexpected error generating swarm plan")
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+
+        try:
+            assignments = [PlanAssignment.model_validate(a) for a in plan["assignments"]]
+            error = validate_swarm_assignments(assignments)
+        except Exception as exc:
+            logger.exception("Unexpected error validating swarm plan")
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+
+        if error:
+            return JSONResponse({"ok": False, "error": error}, status_code=400)
 
         return JSONResponse({"ok": True, "plan": plan})
 
