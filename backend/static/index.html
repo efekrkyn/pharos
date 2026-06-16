@@ -3,7 +3,8 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Drone GCS</title>
+  <title>Pharos</title>
+  <link rel="icon" type="image/png" href="/static/favicon.png" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -15,7 +16,7 @@
 </head>
 <body>
   <header class="topbar">
-    <div class="brand">Drone GCS</div>
+    <div class="brand">Pharos</div>
     <div class="connection-indicator">
       <span id="status-dot" class="status-dot waiting"></span>
       <span id="status-text">Connecting...</span>
@@ -25,6 +26,16 @@
   <div class="layout">
     <main class="map-panel">
       <div id="map"></div>
+      <div class="map-follow-control">
+        <span class="map-follow-label">Map view</span>
+        <select id="map-follow-select">
+          <option value="follow_drone0">Follow D0</option>
+          <option value="follow_drone1">Follow D1</option>
+          <option value="follow_drone2">Follow D2</option>
+          <option value="follow_all" selected>Follow all</option>
+          <option value="free">Free</option>
+        </select>
+      </div>
     </main>
 
     <aside class="sidebar">
@@ -62,62 +73,6 @@
         <div class="ai-input-row">
           <input type="text" id="ai-prompt-input" placeholder="e.g. Survey this area in a grid at 15m" />
           <button id="btn-ai-send" class="btn btn-primary">Send</button>
-        </div>
-      </section>
-
-      <section class="panel">
-        <h2>Telemetry</h2>
-        <div class="controlling-indicator">Controlling: <strong id="controlling-drone-label">D0</strong></div>
-        <div class="telemetry-grid">
-          <div class="telemetry-card">
-            <span class="telemetry-label">Latitude</span>
-            <span class="telemetry-value" id="lat">—</span>
-          </div>
-          <div class="telemetry-card">
-            <span class="telemetry-label">Longitude</span>
-            <span class="telemetry-value" id="lon">—</span>
-          </div>
-          <div class="telemetry-card">
-            <span class="telemetry-label">Abs. altitude</span>
-            <span class="telemetry-value" id="abs-alt">—</span>
-          </div>
-          <div class="telemetry-card">
-            <span class="telemetry-label">Rel. altitude</span>
-            <span class="telemetry-value" id="rel-alt">—</span>
-          </div>
-        </div>
-      </section>
-
-      <section class="panel">
-        <h2>Charts</h2>
-        <div class="chart-block">
-          <span class="telemetry-label">Relative altitude (m)</span>
-          <div class="chart-container">
-            <canvas id="chart-altitude"></canvas>
-          </div>
-        </div>
-        <div class="chart-block">
-          <span class="telemetry-label">Ground speed (m/s)</span>
-          <div class="chart-container">
-            <canvas id="chart-speed"></canvas>
-          </div>
-        </div>
-        <div class="chart-block">
-          <span class="telemetry-label">Battery (%)</span>
-          <div class="chart-container">
-            <canvas id="chart-battery"></canvas>
-          </div>
-          <div id="battery-chart-status" class="hint chart-status"></div>
-        </div>
-      </section>
-
-      <section class="panel">
-        <h2>Flight Commands</h2>
-        <div class="button-row">
-          <button id="btn-arm" class="btn btn-primary" data-endpoint="/api/{drone}/arm">Arm</button>
-          <button id="btn-takeoff" class="btn btn-primary" data-endpoint="/api/{drone}/takeoff">Takeoff</button>
-          <button id="btn-land" class="btn btn-danger" data-endpoint="/api/{drone}/land">Land</button>
-          <button id="btn-rtl" class="btn" data-endpoint="/api/{drone}/rtl">Return to Launch</button>
         </div>
       </section>
 
@@ -162,6 +117,39 @@
       </section>
 
       <section class="panel">
+        <h2>Telemetry</h2>
+        <div class="controlling-indicator">Controlling: <strong id="controlling-drone-label">D0</strong></div>
+        <div class="telemetry-grid">
+          <div class="telemetry-card">
+            <span class="telemetry-label">Latitude</span>
+            <span class="telemetry-value" id="lat">—</span>
+          </div>
+          <div class="telemetry-card">
+            <span class="telemetry-label">Longitude</span>
+            <span class="telemetry-value" id="lon">—</span>
+          </div>
+          <div class="telemetry-card">
+            <span class="telemetry-label">Abs. altitude</span>
+            <span class="telemetry-value" id="abs-alt">—</span>
+          </div>
+          <div class="telemetry-card">
+            <span class="telemetry-label">Rel. altitude</span>
+            <span class="telemetry-value" id="rel-alt">—</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Flight Commands</h2>
+        <div class="button-row">
+          <button id="btn-arm" class="btn btn-primary" data-endpoint="/api/{drone}/arm">Arm</button>
+          <button id="btn-takeoff" class="btn btn-primary" data-endpoint="/api/{drone}/takeoff">Takeoff</button>
+          <button id="btn-land" class="btn btn-danger" data-endpoint="/api/{drone}/land">Land</button>
+          <button id="btn-rtl" class="btn" data-endpoint="/api/{drone}/rtl">Return to Launch</button>
+        </div>
+      </section>
+
+      <section class="panel">
         <h2>Mission Planning</h2>
 
         <div class="mission-controls">
@@ -197,6 +185,29 @@
         <div class="mission-controls">
           <button id="btn-geofence-upload" class="btn btn-primary" data-endpoint="/api/{drone}/geofence/upload">Upload geofence</button>
           <button id="btn-geofence-clear-vehicle" class="btn btn-danger" data-endpoint="/api/{drone}/geofence/clear">Clear on vehicle</button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Charts</h2>
+        <div class="chart-block">
+          <span class="telemetry-label">Relative altitude (m)</span>
+          <div class="chart-container">
+            <canvas id="chart-altitude"></canvas>
+          </div>
+        </div>
+        <div class="chart-block">
+          <span class="telemetry-label">Ground speed (m/s)</span>
+          <div class="chart-container">
+            <canvas id="chart-speed"></canvas>
+          </div>
+        </div>
+        <div class="chart-block">
+          <span class="telemetry-label">Battery (%)</span>
+          <div class="chart-container">
+            <canvas id="chart-battery"></canvas>
+          </div>
+          <div id="battery-chart-status" class="hint chart-status"></div>
         </div>
       </section>
 

@@ -40,6 +40,36 @@ L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
   maxZoom: 20,
 }).addTo(map);
 
+// --- Map follow-mode -------------------------------------------------------
+// Five modes: follow_drone0/1/2 (pan only), follow_all (fitBounds), free.
+
+let mapFollowMode = "follow_all";
+let lastFollowAllFit = 0;
+
+function tryFollowAll() {
+  const now = Date.now();
+  if (now - lastFollowAllFit < 1000) return;
+  lastFollowAllFit = now;
+
+  const positions = DRONE_IDS
+    .map((id) => drones[id].latest)
+    .filter((d) => d.lat !== null && d.lon !== null)
+    .map((d) => [d.lat, d.lon]);
+
+  if (positions.length === 0) return;
+  if (positions.length === 1) {
+    map.panTo(positions[0]);
+    return;
+  }
+  map.fitBounds(L.latLngBounds(positions), { padding: [40, 40], maxZoom: 18 });
+}
+
+document.getElementById("map-follow-select").addEventListener("change", (event) => {
+  mapFollowMode = event.target.value;
+});
+
+// --------------------------------------------------------------------------
+
 function formatNumber(value, digits) {
   return value === null || value === undefined ? "—" : value.toFixed(digits);
 }
@@ -117,9 +147,12 @@ function updateDroneMarker(droneId, lat, lon) {
   }
   state.trail.setLatLngs(state.trailPoints);
 
-  if (droneId === selectedDrone) {
+  if (mapFollowMode === `follow_${droneId}`) {
     map.panTo(position);
+  } else if (mapFollowMode === "follow_all") {
+    tryFollowAll();
   }
+  // "free" mode: markers update but view never moves
 }
 
 // Latest vehicle heading (degrees clockwise from north) for the selected
@@ -1085,3 +1118,8 @@ aiDiscardButton.addEventListener("click", () => {
   appendChatMessage("status", "Plan discarded.");
   clearAiPlan();
 });
+
+// Leaflet needs to recalculate tile coverage after CSS layout changes
+// (body flex + height:100% instead of calc(100vh - 5rem)).
+setTimeout(() => map.invalidateSize(), 100);
+window.addEventListener("resize", () => map.invalidateSize());
