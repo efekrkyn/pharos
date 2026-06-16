@@ -13,6 +13,7 @@
 ---
 
 ![Swarm scan preview](docs/screenshot-swarm.png)
+
 *AI-planned swarm scan: three drones assigned non-overlapping lawnmower sectors over a named location, previewed on the map before the operator approves and launches.*
 
 ---
@@ -162,6 +163,7 @@ Navigate to **http://localhost:8000**. Once each SITL instance reports a MAVLink
 ## Interface
 
 ![Pharos dashboard](docs/screenshot-dashboard.png)
+
 *Main dashboard: Leaflet map with drone markers and trails (left), and a scrollable panel with drone status, AI command, manual control, telemetry, flight commands, mission planning, geofence, and charts (right).*
 
 ---
